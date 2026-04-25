@@ -278,9 +278,24 @@ def cmd_fetch() -> None:
 
     all_articles = compute_trend_multipliers(all_articles)
 
-    # URL重複除去
-    seen: set[str] = set()
-    unique = [a for a in all_articles if a["link"] not in seen and not seen.add(a["link"])]  # type: ignore
+    # URL重複 + タイトル類似重複除去
+    stop = {'の', 'に', 'は', 'が', 'を', 'で', 'と', 'も', 'や', 'な', 'て', 'た', 'し', 'から', 'まで', 'より'}
+    def title_kw(title: str) -> set:
+        words = re.findall(r'[一-龯ぁ-んァ-ン]{2,}|[a-zA-Z]{3,}', title)
+        return {w for w in words if w not in stop}
+
+    seen_urls: set[str] = set()
+    seen_kws: list[set] = []
+    unique = []
+    for a in all_articles:
+        if a["link"] in seen_urls:
+            continue
+        kw = title_kw(a["title"])
+        if any(len(kw & sk) >= 3 for sk in seen_kws):
+            continue
+        seen_urls.add(a["link"])
+        seen_kws.append(kw)
+        unique.append(a)
     print(f"  重複除去後: {len(unique)}件")
 
     label_list = "、".join(ALL_LABELS)
@@ -325,6 +340,11 @@ def cmd_send() -> None:
         print("[ERROR] キャッシュなし。先に fetch を実行してください。")
         sys.exit(1)
 
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    if cache.get("sent_at", "").startswith(today):
+        print(f"[SKIP] 本日({today})は送信済みです。")
+        sys.exit(0)
+
     label_scores = scores["labels"]
     settings = scores["settings"]
     articles = cache["articles"]
@@ -335,7 +355,7 @@ def cmd_send() -> None:
         art["final_score"] = round(ls * tm, 2)
 
     tc = settings.get("trending_count", 2)
-    mc = settings.get("max_articles", 6)
+    mc = settings.get("max_articles", 4)
 
     trending = sorted(
         [a for a in articles if a.get("trend_multiplier", 1.0) >= 1.3],
@@ -367,9 +387,9 @@ def cmd_send() -> None:
         score_str = f"{art['final_score']:.1f}"
         labels_sent.append(label)
 
-        title_short = art["title"][:38]
-        line1 = f"{prefix}{label}▶{score_str}｜「{title_short}」"
-        msg = f"{line1}\n{art['link']}" if art.get("link") else line1
+        title_short = art["title"][:28]
+        url = art.get("link", "")
+        msg = f"{prefix}{label}▶{score_str}｜{title_short}…\n{url}" if url else f"{prefix}{label}▶{score_str}｜{title_short}…"
         send_line(msg)
         time.sleep(1.5)
 
@@ -381,6 +401,9 @@ def cmd_send() -> None:
         qr_items.append({"type": "action", "action": {"type": "message", "label": f"👎{label}", "text": f"BAD:{label}"}})
 
     send_line_quick_reply("気になった記事のラベルを教えてください👇", qr_items)
+
+    cache["sent_at"] = datetime.now(JST).isoformat()
+    save_cache(cache)
     print(f"[完了] {len(selected)}件送信完了")
 
 

@@ -25,7 +25,7 @@
     "decay": 0.93,
     "like_delta": 1.0,
     "dislike_delta": 1.0,
-    "max_articles": 6,
+    "max_articles": 4,
     "trending_count": 2
   },
   "last_decay": "2026-04-26"
