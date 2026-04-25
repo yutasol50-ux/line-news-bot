@@ -3,16 +3,15 @@
 パーソナライズニュース自動配信システム（LINE + Cohere版）
 
 使用方法:
-  python3 news_delivery.py fetch          # ニュース取得・要約（深夜3時）
-  python3 news_delivery.py send economy   # 経済ニュース送信
-  python3 news_delivery.py send work      # 仕事・自己啓発送信
-  python3 news_delivery.py send english   # 英語学習送信
-  python3 news_delivery.py test           # テスト送信
-  python3 news_delivery.py status         # API使用状況確認
-  python3 news_delivery.py reset          # カウンターリセット
+  python3 news_delivery.py fetch    # ニュース取得・要約（深夜3時）
+  python3 news_delivery.py send     # ニュース送信（朝7時）
+  python3 news_delivery.py test     # テスト送信
+  python3 news_delivery.py status   # スコア・API使用状況確認
+  python3 news_delivery.py reset    # カウンターリセット
 """
 import json
 import os
+import re
 import sys
 import time
 import requests
@@ -22,12 +21,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 import cohere
 
-# .envを読み込む
 load_dotenv(Path(__file__).parent / ".env")
-
 import request_counter
 
-# ====== 設定 ======
 COHERE_API_KEY = os.environ["COHERE_API_KEY"]
 LINE_ACCESS_TOKEN = os.environ["LINE_ACCESS_TOKEN"]
 LINE_USER_ID = os.environ["LINE_USER_ID"]
@@ -38,76 +34,89 @@ JST = timezone(timedelta(hours=9))
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 CACHE_FILE = DATA_DIR / "news_cache.json"
+SCORES_FILE = Path(__file__).parent / "scores.json"
 
-# ====== RSSソース定義 ======
-RSS_SOURCES = {
-    "economy": [
-        {"name": "Yahoo JP経済",  "url": "https://news.yahoo.co.jp/rss/topics/business.xml"},
-        {"name": "NHK経済",       "url": "https://www3.nhk.or.jp/rss/news/cat4.xml"},
-        {"name": "東洋経済",      "url": "https://toyokeizai.net/list/feed/rss"},
-        {"name": "WSJ Markets",   "url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"},
-        {"name": "BBC World",     "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
-    ],
-    "work": [
-        {"name": "東洋経済",       "url": "https://toyokeizai.net/list/feed/rss"},
-        {"name": "Lifehacker JP",  "url": "https://www.lifehacker.jp/feed/index.xml"},
-        {"name": "O'Reilly Radar", "url": "https://feeds.feedburner.com/oreilly/radar/atom"},
-        {"name": "VentureBeat",    "url": "https://feeds.feedburner.com/venturebeat/SZYF"},
-    ],
-    "english": [
-        {"name": "VOA Learning English", "url": "https://learningenglish.voanews.com/podcast/"},
-        {"name": "BBC World News",       "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
-    ],
-}
+ALL_LABELS = [
+    "AI", "テクノロジー", "セキュリティ", "宇宙・科学",
+    "経済", "株式・投資", "仮想通貨", "不動産",
+    "仕事", "起業・スタートアップ", "教育", "英語",
+    "政治・国際", "社会・日本", "環境・エネルギー",
+    "健康・医療", "ライフスタイル", "エンタメ", "スポーツ", "その他",
+]
 
-# ====== プロンプトテンプレート ======
-PROMPTS = {
-    "economy": """以下のニュースについて、あなたが持つ知識も活用して解説してください。
-タイトルのみの場合もそのトピックについて解説してください。
+RSS_SOURCES = [
+    {"name": "Yahoo JP経済",        "url": "https://news.yahoo.co.jp/rss/topics/business.xml"},
+    {"name": "NHK総合",             "url": "https://www3.nhk.or.jp/rss/news/cat0.xml"},
+    {"name": "NHK経済",             "url": "https://www3.nhk.or.jp/rss/news/cat4.xml"},
+    {"name": "東洋経済",            "url": "https://toyokeizai.net/list/feed/rss"},
+    {"name": "WSJ Markets",         "url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"},
+    {"name": "BBC World",           "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
+    {"name": "Lifehacker JP",       "url": "https://www.lifehacker.jp/feed/index.xml"},
+    {"name": "O'Reilly Radar",      "url": "https://feeds.feedburner.com/oreilly/radar/atom"},
+    {"name": "VentureBeat",         "url": "https://feeds.feedburner.com/venturebeat/SZYF"},
+    {"name": "VOA Learning English", "url": "https://learningenglish.voanews.com/podcast/"},
+]
 
-ニュース:
-{content}
+SUMMARY_PROMPT = """以下のニュース記事を分析してください。
 
-以下の形式で回答してください:
-【要約】
-（3行以内で簡潔に。タイトルのみの場合はそのトピックの背景・意味を説明）
+タイトル: {title}
+本文: {desc}
 
-【重要度】★X/5
-【投資家ポイント】（市場や投資への影響を1行で）""",
+以下の形式で回答してください：
+【要点】
+（2行以内で簡潔に。タイトルのみの場合は背景を説明）
 
-    "work": """以下のニュースについて、あなたが持つ知識も活用して解説してください。
-タイトルのみの場合もそのトピックについて解説してください。
+【ラベル】
+（次のラベルから最も適切な1つだけ選択: {labels}）"""
 
-ニュース:
-{content}
 
-以下の形式で回答してください:
-【要約】
-（3行以内で簡潔に。タイトルのみの場合はそのトピックの実務的意義を説明）
+# ====== スコア管理 ======
 
-【重要度】★X/5
-【実務ポイント】（すぐに使えるアクションや示唆を1行で）""",
+def load_scores() -> dict:
+    if SCORES_FILE.exists():
+        try:
+            return json.loads(SCORES_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "labels": {l: 5.0 for l in ALL_LABELS},
+        "settings": {
+            "decay": 0.93, "like_delta": 1.0, "dislike_delta": 1.0,
+            "max_articles": 6, "trending_count": 2,
+        },
+        "last_decay": "",
+    }
 
-    "english": """以下の英語ニュースを英語学習のために解説してください。
-タイトルのみの場合もそのトピックについて英語学習コンテンツを作成してください。
 
-ニュース:
-{content}
+def save_scores(scores: dict) -> None:
+    SCORES_FILE.write_text(json.dumps(scores, ensure_ascii=False, indent=2), encoding="utf-8")
 
-以下の形式で出力してください:
-【原文（B1レベル）】
-（B1レベルの平易な英語で要約、2〜3文）
 
-【日本語訳】
-（自然な日本語訳）
+def apply_decay(scores: dict) -> None:
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    if scores.get("last_decay") == today:
+        return
+    decay = scores["settings"]["decay"]
+    for label in scores["labels"]:
+        current = scores["labels"][label]
+        scores["labels"][label] = round(5.0 + (current - 5.0) * decay, 2)
+    scores["last_decay"] = today
+    save_scores(scores)
+    print(f"[減衰適用] ×{decay} → 5.0に近づける")
 
-【重要単語】
-1. word - 意味
-2. word - 意味
-3. word - 意味""",
-}
 
 # ====== RSS取得 ======
+
+def get_field(item, *tags) -> str:
+    for tag in tags:
+        el = item.find(tag)
+        if el is not None:
+            text = el.text or el.get("href", "")
+            if text:
+                return text.strip()
+    return ""
+
+
 def fetch_rss(url: str, timeout: int = 15) -> list[dict]:
     try:
         resp = requests.get(
@@ -117,7 +126,6 @@ def fetch_rss(url: str, timeout: int = 15) -> list[dict]:
         )
         resp.raise_for_status()
 
-        import re
         raw = resp.content
         raw = re.sub(rb'xmlns(?::\w+)?="[^"]*"', b'', raw)
         raw = re.sub(rb"xmlns(?::\w+)?='[^']*'", b'', raw)
@@ -125,66 +133,84 @@ def fetch_rss(url: str, timeout: int = 15) -> list[dict]:
         raw = re.sub(rb' [\w][\w.-]*:([\w][\w.-]*)=', rb' \1=', raw)
         root = ET.fromstring(raw)
 
-        items = root.findall(".//item")
-        if not items:
-            items = root.findall(".//entry")
-
+        items = root.findall(".//item") or root.findall(".//entry")
         articles = []
         for item in items[:5]:
-            def get_text(*tags):
-                for tag in tags:
-                    el = item.find(tag)
-                    if el is not None:
-                        text = el.text or el.get("href", "")
-                        if text:
-                            return text.strip()
-                return ""
-
-            title = get_text("title")
-            desc = get_text("description", "summary", "content", "encoded")
-            link = get_text("link", "url")
-            pub = get_text("pubDate", "published", "updated", "date")
-
+            title = get_field(item, "title")
+            desc  = get_field(item, "description", "summary", "content", "encoded")
+            link  = get_field(item, "link", "url")
+            pub   = get_field(item, "pubDate", "published", "updated", "date")
             if desc:
-                desc = re.sub(r'<[^>]+>', '', desc)[:500]
-
+                desc = re.sub(r'<[^>]+>', '', desc)[:400]
             if title:
-                articles.append({
-                    "title": title,
-                    "description": desc,
-                    "link": link,
-                    "pubDate": pub,
-                })
+                articles.append({"title": title, "description": desc, "link": link, "pubDate": pub})
         return articles
     except Exception as e:
         print(f"[WARN] RSS取得失敗 {url}: {e}")
         return []
 
 
-# ====== Cohere API呼び出し ======
+# ====== トレンド検出 ======
+
+def compute_trend_multipliers(articles: list[dict]) -> list[dict]:
+    stop = {'の', 'に', 'は', 'が', 'を', 'で', 'と', 'も', 'や', 'な', 'て', 'た', 'し', 'から', 'まで', 'より'}
+
+    def keywords(title: str) -> set:
+        words = re.findall(r'[一-龯ぁ-んァ-ン]{2,}|[a-zA-Z]{3,}', title)
+        return {w for w in words if w not in stop}
+
+    kws = [keywords(a["title"]) for a in articles]
+    for i, art in enumerate(articles):
+        if not kws[i]:
+            art["trend_multiplier"] = 1.0
+            continue
+        overlap = sum(1 for j, kw in enumerate(kws) if i != j and len(kws[i] & kw) >= 2)
+        art["trend_multiplier"] = (1.5 if overlap >= 3 else 1.3 if overlap >= 2 else 1.1 if overlap >= 1 else 1.0)
+    return articles
+
+
+# ====== Cohere API ======
+
 def call_cohere(prompt: str) -> str | None:
     if not request_counter.can_request(1):
         print("[ERROR] 1日のリクエスト上限に達しました")
         return None
-
     try:
         response = co.chat(
             model="command-r-plus-08-2024",
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
         text = response.message.content[0].text
         status = request_counter.increment(1)
-
         if status["warning"]:
             send_line(f"⚠️ API残り {status['remaining']} 回")
-
         return text.strip()
     except Exception as e:
-        print(f"[ERROR] Cohere API呼び出し失敗: {e}")
+        print(f"[ERROR] Cohere API失敗: {e}")
         return None
 
 
+def parse_label(text: str) -> str:
+    m = re.search(r'【ラベル】\s*\n?\s*(.+)', text)
+    if m:
+        candidate = m.group(1).strip().split()[0]
+        if candidate in ALL_LABELS:
+            return candidate
+    for label in ALL_LABELS:
+        if label in text:
+            return label
+    return "その他"
+
+
+def parse_summary(text: str) -> str:
+    m = re.search(r'【要点】\s*\n([\s\S]+?)(?:\n【|$)', text)
+    if m:
+        return m.group(1).strip()
+    return text[:80]
+
+
 # ====== LINE送信 ======
+
 def send_line(text: str) -> bool:
     chunks = [text[i:i+4900] for i in range(0, len(text), 4900)]
     success = True
@@ -192,14 +218,8 @@ def send_line(text: str) -> bool:
         try:
             resp = requests.post(
                 "https://api.line.me/v2/bot/message/push",
-                headers={
-                    "Authorization": f"Bearer {LINE_ACCESS_TOKEN}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "to": LINE_USER_ID,
-                    "messages": [{"type": "text", "text": chunk}]
-                },
+                headers={"Authorization": f"Bearer {LINE_ACCESS_TOKEN}", "Content-Type": "application/json"},
+                json={"to": LINE_USER_ID, "messages": [{"type": "text", "text": chunk}]},
                 timeout=30,
             )
             if resp.status_code != 200:
@@ -212,7 +232,25 @@ def send_line(text: str) -> bool:
     return success
 
 
+def send_line_quick_reply(text: str, items: list[dict]) -> bool:
+    try:
+        resp = requests.post(
+            "https://api.line.me/v2/bot/message/push",
+            headers={"Authorization": f"Bearer {LINE_ACCESS_TOKEN}", "Content-Type": "application/json"},
+            json={
+                "to": LINE_USER_ID,
+                "messages": [{"type": "text", "text": text, "quickReply": {"items": items}}],
+            },
+            timeout=30,
+        )
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"[ERROR] QuickReply送信例外: {e}")
+        return False
+
+
 # ====== キャッシュ管理 ======
+
 def save_cache(data: dict) -> None:
     CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -226,119 +264,162 @@ def load_cache() -> dict:
     return {}
 
 
-# ====== ニュース取得・要約 ======
+# ====== コマンド: fetch ======
+
 def cmd_fetch() -> None:
     print(f"[{datetime.now(JST).strftime('%H:%M:%S')}] ニュース取得・要約開始")
-    cache = {}
+    all_articles: list[dict] = []
 
-    for category, sources in RSS_SOURCES.items():
-        print(f"  カテゴリ: {category}")
-        summaries = []
+    for source in RSS_SOURCES:
+        print(f"  RSS取得: {source['name']}")
+        for art in fetch_rss(source["url"])[:3]:
+            art["source"] = source["name"]
+            all_articles.append(art)
 
-        for source in sources:
-            print(f"    RSS取得: {source['name']}")
-            articles = fetch_rss(source["url"])
+    all_articles = compute_trend_multipliers(all_articles)
 
-            for art in articles[:3]:
-                if not request_counter.can_request(1):
-                    print("[WARN] リクエスト上限のため処理停止")
-                    break
+    # URL重複除去
+    seen: set[str] = set()
+    unique = [a for a in all_articles if a["link"] not in seen and not seen.add(a["link"])]  # type: ignore
+    print(f"  重複除去後: {len(unique)}件")
 
-                content = f"タイトル: {art['title']}\n本文: {art['description']}"
-                prompt = PROMPTS[category].format(content=content)
-                print(f"      要約中: {art['title'][:50]}...")
+    label_list = "、".join(ALL_LABELS)
+    summaries = []
+    for art in unique:
+        if not request_counter.can_request(1):
+            print("[WARN] リクエスト上限のため処理停止")
+            break
 
-                summary = call_cohere(prompt)
-                if summary:
-                    summaries.append({
-                        "source": source["name"],
-                        "title": art["title"],
-                        "link": art["link"],
-                        "pubDate": art["pubDate"],
-                        "summary": summary,
-                    })
-                time.sleep(2)
+        prompt = SUMMARY_PROMPT.format(
+            title=art["title"],
+            desc=art["description"][:300],
+            labels=label_list,
+        )
+        print(f"    解析中: {art['title'][:45]}...")
 
-        cache[category] = {
-            "fetched_at": datetime.now(JST).isoformat(),
-            "articles": summaries,
-        }
-        print(f"  {category}: {len(summaries)}件 要約完了")
+        result = call_cohere(prompt)
+        if result:
+            summaries.append({
+                "source": art["source"],
+                "title": art["title"],
+                "link": art["link"],
+                "pubDate": art["pubDate"],
+                "label": parse_label(result),
+                "summary": parse_summary(result),
+                "trend_multiplier": art.get("trend_multiplier", 1.0),
+            })
+        time.sleep(1.5)
 
-    save_cache(cache)
-    print(f"\n[完了] 取得・要約完了。{request_counter.status()}")
+    save_cache({"fetched_at": datetime.now(JST).isoformat(), "articles": summaries})
+    print(f"\n[完了] {len(summaries)}件取得。{request_counter.status()}")
 
 
-# ====== LINE送信コマンド ======
-def cmd_send(category: str) -> None:
-    label_map = {
-        "economy": "経済・マーケット",
-        "work":    "仕事・自己啓発",
-        "english": "英語学習",
-    }
+# ====== コマンド: send ======
 
-    if category not in label_map:
-        print(f"[ERROR] 不明なカテゴリ: {category}")
-        sys.exit(1)
+def cmd_send() -> None:
+    scores = load_scores()
+    apply_decay(scores)
 
-    label = label_map[category]
     cache = load_cache()
-
-    if category not in cache or not cache[category]["articles"]:
-        print(f"[ERROR] キャッシュなし。先に fetch を実行してください。")
+    if not cache or not cache.get("articles"):
+        print("[ERROR] キャッシュなし。先に fetch を実行してください。")
         sys.exit(1)
 
-    data = cache[category]
-    fetched_at = data["fetched_at"][:16].replace("T", " ")
-    articles = data["articles"]
+    label_scores = scores["labels"]
+    settings = scores["settings"]
+    articles = cache["articles"]
+
+    for art in articles:
+        ls = label_scores.get(art["label"], 5.0)
+        tm = art.get("trend_multiplier", 1.0)
+        art["final_score"] = round(ls * tm, 2)
+
+    tc = settings.get("trending_count", 2)
+    mc = settings.get("max_articles", 6)
+
+    trending = sorted(
+        [a for a in articles if a.get("trend_multiplier", 1.0) >= 1.3],
+        key=lambda x: x["final_score"], reverse=True,
+    )
+    regular = sorted(
+        [a for a in articles if a.get("trend_multiplier", 1.0) < 1.3],
+        key=lambda x: x["final_score"], reverse=True,
+    )
+
+    seen: set[str] = set()
+    selected = []
+    for art in trending[:tc] + regular:
+        if len(selected) >= mc:
+            break
+        if art["link"] not in seen:
+            seen.add(art["link"])
+            selected.append(art)
 
     now_str = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
-    header = (
-        f"📰 {label}ニュース | {now_str}\n"
-        f"（取得: {fetched_at} JST | {len(articles)}件）\n"
-        f"{'─' * 30}"
-    )
-    send_line(header)
+    send_line(f"📰 ニュース配信 {now_str}（{len(selected)}件）")
+    time.sleep(1)
 
-    for i, art in enumerate(articles, 1):
-        emoji = {"economy": "📈", "work": "💼", "english": "🇬🇧"}.get(category, "📄")
-        msg = (
-            f"{emoji} [{i}/{len(articles)}] {art['title'][:80]}\n"
-            f"ソース: {art['source']}"
-            + (f"\n{art['link']}" if art.get("link") else "")
-            + f"\n\n{art['summary']}"
-        )
+    labels_sent = []
+    for art in selected:
+        is_trend = art.get("trend_multiplier", 1.0) >= 1.3
+        prefix = "🔥 " if is_trend else ""
+        label = art["label"]
+        score_str = f"{art['final_score']:.1f}"
+        labels_sent.append(label)
+
+        title_short = art["title"][:38]
+        line1 = f"{prefix}{label}▶{score_str}｜「{title_short}」"
+        msg = f"{line1}\n{art['link']}" if art.get("link") else line1
         send_line(msg)
         time.sleep(1.5)
 
-    print(f"[完了] {label}: {len(articles)}件送信完了")
+    # 👍/👎 クイックリプライ（最後の1通）
+    unique_labels = list(dict.fromkeys(labels_sent))[:6]
+    qr_items = []
+    for label in unique_labels:
+        qr_items.append({"type": "action", "action": {"type": "message", "label": f"👍{label}", "text": f"LIKE:{label}"}})
+        qr_items.append({"type": "action", "action": {"type": "message", "label": f"👎{label}", "text": f"BAD:{label}"}})
+
+    send_line_quick_reply("気になった記事のラベルを教えてください👇", qr_items)
+    print(f"[完了] {len(selected)}件送信完了")
 
 
-# ====== テスト送信 ======
+# ====== コマンド: test ======
+
 def cmd_test() -> None:
     now_str = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
+    scores = load_scores()
+    top5 = sorted(scores["labels"].items(), key=lambda x: -x[1])[:5]
+    label_str = "\n".join([f"  {k}: {v}" for k, v in top5])
     msg = (
         f"🤖 [テスト] LINE News Bot 接続確認\n"
         f"時刻: {now_str} JST\n"
-        f"ニュース自動配信システム起動確認メッセージです。\n"
+        f"スコアTOP5:\n{label_str}\n"
         f"{request_counter.status()}"
     )
     ok = send_line(msg)
     print("✅ 成功" if ok else "❌ 失敗")
 
 
-# ====== ステータス表示 ======
+# ====== コマンド: status ======
+
 def cmd_status() -> None:
-    print(request_counter.status())
+    scores = load_scores()
+    print("=== ラベルスコア ===")
+    for label, score in sorted(scores["labels"].items(), key=lambda x: -x[1]):
+        filled = int(score)
+        bar = "█" * filled + "░" * (10 - filled)
+        print(f"  {label:<18} [{bar}] {score:.1f}")
+    print(f"\n{request_counter.status()}")
     cache = load_cache()
-    print("\n--- キャッシュ状況 ---")
-    for cat, data in cache.items():
-        n = len(data.get("articles", []))
-        t = data.get("fetched_at", "なし")[:16]
-        print(f"  {cat}: {n}件 (取得: {t})")
+    if cache:
+        n = len(cache.get("articles", []))
+        t = cache.get("fetched_at", "なし")[:16]
+        print(f"\nキャッシュ: {n}件 (取得: {t})")
 
 
 # ====== エントリーポイント ======
+
 if __name__ == "__main__":
     args = sys.argv[1:]
 
@@ -347,10 +428,7 @@ if __name__ == "__main__":
     elif args[0] == "fetch":
         cmd_fetch()
     elif args[0] == "send":
-        if len(args) < 2:
-            print("使用法: python3 news_delivery.py send [economy|work|english]")
-            sys.exit(1)
-        cmd_send(args[1])
+        cmd_send()
     elif args[0] == "test":
         cmd_test()
     elif args[0] == "reset":

@@ -1,5 +1,5 @@
 """
-Gemma4 APIリクエスト数管理モジュール
+Cohere APIリクエスト数管理モジュール
 1日の上限900回、残り100回で警告、超過時は停止
 翌日0時(JST)にリセット
 """
@@ -95,7 +95,7 @@ def status() -> str:
     bar = "█" * bar_filled + "░" * (20 - bar_filled)
     pct = count / DAILY_LIMIT * 100
     return (
-        f"**Gemma4 APIリクエスト状況** ({today})\n"
+        f"**Cohere APIリクエスト状況** ({today})\n"
         f"`[{bar}]` {pct:.1f}%\n"
         f"使用: {count}/{DAILY_LIMIT} | 残り: {remaining}"
     )
