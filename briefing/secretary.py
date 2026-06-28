@@ -13,6 +13,9 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+# プロジェクト直下を import パスに追加(shared/ を解決するため)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 JST = timezone(timedelta(hours=9))
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -96,7 +99,7 @@ def main() -> None:
         print(f"[SKIP] 本日は送信済み（{datetime.now(JST):%Y-%m-%d}）")
         return
 
-    from line_send import send_line
+    from shared.line_client import push as send_line
     message = build_briefing()
     ok = send_line(message)
     if ok:
