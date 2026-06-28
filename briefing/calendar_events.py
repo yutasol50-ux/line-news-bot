@@ -12,7 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import requests
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 ICAL_URL = os.environ.get("CALENDAR_ICAL_URL", "").strip()
 JST = timezone(timedelta(hours=9))

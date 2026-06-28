@@ -8,12 +8,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 import cohere
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 COHERE_API_KEY = os.environ["COHERE_API_KEY"]
 co = cohere.ClientV2(api_key=COHERE_API_KEY)
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 SEEN_FILE = DATA_DIR / "seen_words.json"
 
