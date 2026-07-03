@@ -591,7 +591,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Hermes メモツール `hermes_tools/memo_tool.py`
+### Task 6 ✅: Hermes メモツール `hermes_tools/memo_tool.py`
 
 Hermesがメモを追加できる自作ツール。calendar_tool と同じ流儀。
 
