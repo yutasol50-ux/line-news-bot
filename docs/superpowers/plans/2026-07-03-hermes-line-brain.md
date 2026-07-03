@@ -689,7 +689,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Hermesにツールを登録(symlink + toolset有効化 + 再起動)
+### Task 7 ✅: Hermesにツールを登録(symlink + toolset有効化 + 再起動)
 
 自作ツールをHermesに認識させ、api_server(=LINE頭脳)で使える状態にする。慎重ゾーン。
 

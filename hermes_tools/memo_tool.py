@@ -23,17 +23,4 @@ MEMO_ADD_SCHEMA = {
     },
 }
 
-try:
-    from tools import registry
-
-    registry.register(
-        name="memo_add",
-        toolset="line_secretary",
-        schema=MEMO_ADD_SCHEMA,
-        handler=lambda args, **kw: memo_add(
-            args.get("content", ""), args.get("tags"), args.get("when"),
-        ),
-        emoji="📝",
-    )
-except Exception:
-    pass
+# Hermesへの登録は hermes_tools/line_secretary_tools.py(アダプタ)で行う。

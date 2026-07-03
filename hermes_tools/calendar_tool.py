@@ -58,25 +58,5 @@ CALENDAR_READ_SCHEMA = {
     "parameters": {"type": "object", "properties": {}},
 }
 
-try:
-    from tools import registry
-
-    registry.register(
-        name="calendar_add",
-        toolset="line_secretary",
-        schema=CALENDAR_ADD_SCHEMA,
-        handler=lambda args, **kw: calendar_add(
-            args.get("title", ""), args.get("start", ""),
-            args.get("end"), args.get("all_day", False),
-        ),
-        emoji="📅",
-    )
-    registry.register(
-        name="calendar_read",
-        toolset="line_secretary",
-        schema=CALENDAR_READ_SCHEMA,
-        handler=lambda args, **kw: calendar_read(),
-        emoji="📅",
-    )
-except Exception:
-    pass
+# Hermesへの登録は hermes_tools/line_secretary_tools.py(発見器に拾わせるアダプタ)で行う。
+# このファイルはロジックとスキーマのみを提供し、単体で import できる状態に保つ。
