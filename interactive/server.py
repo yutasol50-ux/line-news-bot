@@ -15,6 +15,7 @@ from flask import Flask, request, abort
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from interactive import dispatch
+from interactive import hermes_brain
 from shared import line_client
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -52,7 +53,10 @@ def _spawn(fn) -> None:
 
 
 def _process(text: str, reply_token: str, now_iso: str) -> None:
-    msg = dispatch.handle(text, now_iso)
+    if os.environ.get("HERMES_BRAIN", "").lower() in ("on", "1", "true"):
+        msg = hermes_brain.ask(text, "line-owner")
+    else:
+        msg = dispatch.handle(text, now_iso)
     line_client.reply(reply_token, msg)
 
 
