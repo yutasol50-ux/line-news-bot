@@ -293,7 +293,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 4: actions のCLI入口 `interactive/actions/cli.py`
+### Task 4 ✅: actions のCLI入口 `interactive/actions/cli.py`
 
 Hermes(別venv/別プロセス)から既存action関数を呼べるよう、`.env`を読み込む薄いCLIを用意。認証情報は line-news-bot 側に留まる。
 
