@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Gemini(REST, function calling)で 自然文 → 構造化アクション に変換する。"""
 import os
+import time
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
 
+from interactive import rule_parse
+
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-MODEL = "gemini-2.5-flash-lite"
+MODEL = "gemini-2.5-flash"
 ENDPOINT = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 )
@@ -52,25 +55,66 @@ def _system_instruction(now_iso: str) -> dict:
     }]}
 
 
+# Geminiの一時障害(過負荷/タイムアウト)はここでリトライする。
+# LINEへは即200を返す非同期処理なので、多少待ってでも成功させた方がよい。
+# 注意: 429(日次クォータ超過)はリトライしない。回復しないのに無料枠を食い潰すだけ。
+_MAX_RETRIES = 4
+_RETRY_STATUS = {500, 502, 503, 504}
+
+
+def _backoff(attempt: int) -> float:
+    return min(2 ** attempt, 8)  # 1, 2, 4, 8 秒
+
+
 def _call_gemini(payload: dict) -> dict:
-    """Gemini generateContent を叩く境界。テストで差し替える。"""
-    resp = requests.post(
-        ENDPOINT,
-        params={"key": GEMINI_API_KEY},
-        json=payload,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    """Gemini generateContent を叩く境界。503/タイムアウト等の一時障害はリトライ。"""
+    for attempt in range(_MAX_RETRIES):
+        last = attempt == _MAX_RETRIES - 1
+        try:
+            resp = requests.post(
+                ENDPOINT,
+                params={"key": GEMINI_API_KEY},
+                json=payload,
+                timeout=20,
+            )
+        except (requests.Timeout, requests.ConnectionError) as e:
+            if last:
+                raise
+            print(f"[WARN] Gemini接続失敗 (試行{attempt + 1}): {e} → リトライ")
+            time.sleep(_backoff(attempt))
+            continue
+        if resp.status_code in _RETRY_STATUS and not last:
+            print(f"[WARN] Gemini {resp.status_code} (試行{attempt + 1}) → リトライ")
+            time.sleep(_backoff(attempt))
+            continue
+        resp.raise_for_status()
+        return resp.json()
+
+
+_QUOTA_HINT = (
+    "今ちょっとAIが混んでて自動で読み取れなかった🙏 "
+    "予定なら「7月1日サッカー」「明日14時に歯医者」みたいに"
+    "日付+用件で書いてくれれば、AIなしでも登録できるよ"
+)
 
 
 def parse_intent(text: str, now_iso: str) -> dict:
+    # まずローカルのルールで定型を処理(無料枠を消費しない)
+    ruled = rule_parse.parse(text, now_iso)
+    if ruled is not None:
+        return ruled
+
     payload = {
         "system_instruction": _system_instruction(now_iso),
         "contents": [{"role": "user", "parts": [{"text": text}]}],
         "tools": _TOOLS,
     }
-    data = _call_gemini(payload)
+    try:
+        data = _call_gemini(payload)
+    except Exception as e:
+        # 429(無料枠切れ)や障害時。ルールで拾えなかった文なので諦めて案内する。
+        print(f"[WARN] Gemini不可、ルールでも拾えず: {e}")
+        return {"action": "none", "params": {}, "message": _QUOTA_HINT}
     parts = (
         data.get("candidates", [{}])[0]
         .get("content", {})

@@ -5,6 +5,7 @@ import sys
 import base64
 import hashlib
 import hmac
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
@@ -21,6 +22,38 @@ CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 JST = timezone(timedelta(hours=9))
 
 app = Flask(__name__)
+
+# --- 重複処理の防止 ---------------------------------------------------------
+# LINEは応答が遅い/失敗すると同じイベントを再配信する(at-least-once)。
+# webhookEventId で冪等化し、同じ予定が何度も登録されるのを防ぐ。
+_MAX_SEEN = 2000
+_seen_ids: list[str] = []
+_seen_set: set[str] = set()
+_seen_lock = threading.Lock()
+
+
+def _seen(event_id: str) -> bool:
+    """未処理なら記録して False、処理済みなら True を返す(IDが空なら常に False)。"""
+    if not event_id:
+        return False
+    with _seen_lock:
+        if event_id in _seen_set:
+            return True
+        _seen_set.add(event_id)
+        _seen_ids.append(event_id)
+        if len(_seen_ids) > _MAX_SEEN:
+            _seen_set.discard(_seen_ids.pop(0))
+    return False
+
+
+def _spawn(fn) -> None:
+    """重い処理をバックグラウンドで実行(テストでは同期実行に差し替える)。"""
+    threading.Thread(target=fn, daemon=True).start()
+
+
+def _process(text: str, reply_token: str, now_iso: str) -> None:
+    msg = dispatch.handle(text, now_iso)
+    line_client.reply(reply_token, msg)
 
 
 def verify_signature(body: bytes, signature: str) -> bool:
@@ -43,11 +76,19 @@ def webhook():
     now_iso = datetime.now(JST).isoformat(timespec="seconds")
     payload = request.get_json(silent=True) or {}
     for event in payload.get("events", []):
-        if event.get("type") == "message" and event.get("message", {}).get("type") == "text":
-            text = event["message"]["text"]
-            reply_token = event.get("replyToken", "")
-            msg = dispatch.handle(text, now_iso)
-            line_client.reply(reply_token, msg)
+        if event.get("type") != "message" or event.get("message", {}).get("type") != "text":
+            continue
+        event_id = event.get("webhookEventId", "")
+        # 多重登録の防止は webhookEventId の重複排除だけで行う。
+        # isRedelivery では弾かない: 一度も処理できなかったイベントの再送
+        # (LINEがくれる再試行)まで捨ててしまい無反応になるため。
+        if _seen(event_id):
+            print(f"[INFO] 重複イベントをスキップ: {event_id}")
+            continue
+        text = event["message"]["text"]
+        reply_token = event.get("replyToken", "")
+        # 即200を返してLINEのタイムアウト→再配信を防ぐ。実処理は別スレッドへ。
+        _spawn(lambda t=text, rt=reply_token: _process(t, rt, now_iso))
     return "ok", 200
 
 
