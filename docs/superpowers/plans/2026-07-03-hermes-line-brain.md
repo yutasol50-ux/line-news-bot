@@ -438,7 +438,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Hermes 予定ツール `hermes_tools/calendar_tool.py`
+### Task 5 ✅: Hermes 予定ツール `hermes_tools/calendar_tool.py`
 
 Hermesが予定を「登録/照会」できる自作ツール。cli.py へ subprocess し、registry に自己登録。
 
