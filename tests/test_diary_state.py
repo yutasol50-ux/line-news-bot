@@ -38,3 +38,14 @@ def test_state_persists_across_reload(tmp_path, monkeypatch):
     st.append_text("消えないで", now="t1")
     # 別プロセス相当: ファイルから読み直す(モジュール内キャッシュを使わない)
     assert st.is_active() and st.raw() == "消えないで"
+
+
+def test_reopen_keeps_draft(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "STATE_FILE", tmp_path / "_active.json")
+    st.start("2026-07-07", now="t0")
+    st.append_text("下書き", now="t1")
+    st.set_confirming({"title": "x", "tags": [], "body": "b"}, now="t2")
+    st.reopen(now="t3")
+    assert st.phase() == "collecting"
+    assert st.raw() == "下書き"          # 下書きは残る
+    assert st.composed() is None

@@ -83,3 +83,12 @@ def last():
 
 def clear() -> None:
     _save({"active": False})
+
+
+def reopen(*, now: str) -> None:
+    """confirming等から collecting に戻す。下書き(raw_parts/photos)は保持する。"""
+    s = _load()
+    s["phase"] = "collecting"
+    s["composed"] = None
+    s["last"] = now
+    _save(s)
