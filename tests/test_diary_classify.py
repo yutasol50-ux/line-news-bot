@@ -28,3 +28,19 @@ def test_keyword_fallback_content_default(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
     # 中身っぽい文はフォールバックでも content(取りこぼさない)
     assert dcl.classify("今日は駅で人身事故対応でバタバタした") == "content"
+
+
+def test_keyword_fallback_negation_is_reject(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setattr(dcl.requests, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    assert dcl.classify("いいえ") == "reject"
+    assert dcl.classify("ううん") == "reject"
+
+
+def test_keyword_fallback_still_affirms_yes(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setattr(dcl.requests, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    assert dcl.classify("うん") == "affirm"
+    assert dcl.classify("いいよ") == "affirm"
