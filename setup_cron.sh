@@ -25,6 +25,8 @@ cat >> "$TEMP" << EOF
 # ======== LINE秘書ブリーフィング ========
 # 朝5:30: カレンダー予定+天気2地点+今朝のニュース+本日の一語 を1通で配信
 30 5 * * * cd $SCRIPT_DIR && git pull --quiet 2>/dev/null; $PYTHON $SCRIPT_DIR/secretary.py >> $LOG_DIR/secretary.log 2>&1
+# 夜20:00: 日記の声かけ(今日どうだった?)
+0 20 * * * cd $SCRIPT_DIR && $PYTHON $SCRIPT_DIR/diary_prompt.py >> $LOG_DIR/diary.log 2>&1
 # ==================================================
 EOF
 
