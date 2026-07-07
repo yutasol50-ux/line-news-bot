@@ -9,14 +9,12 @@
 from interactive import line_media
 from interactive import research_async
 from interactive.vision import read as vision_read
+from interactive.vision import _IMAGE_TYPES  # 対応画像typeはvisionと単一の真実で共有(ドリフト防止)
 from shared import line_client
 
 _UNSUPPORTED = "ごめん、その形式のファイルはまだ読めないんだ。写真かPDFなら読めるよ！"
 _READ_FAIL = "うまく読み取れなかった…もう一度送ってみてくれる?"
 _FETCH_FAIL = "ファイルの取得でつまずいちゃった。もう一度送ってみて。"
-
-# LINE content-type → 対応可否。file(PDF)と各画像のみ通す。
-_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 
 def _normalize(content_type):
@@ -57,11 +55,13 @@ def handle(message_id, kind, reply_token, *, session_id="line-owner",
 
     media_type = _normalize(content_type)
     if media_type is None:
+        print(f"[INFO] media_intake unsupported: content_type={content_type}")
         reply(reply_token, _UNSUPPORTED)
         return "unsupported"
 
     extraction = read(data, media_type)
     if not extraction:
+        print(f"[ERROR] media_intake read_error: media_type={media_type} bytes={len(data)}")
         reply(reply_token, _READ_FAIL)
         return "read_error"
 
