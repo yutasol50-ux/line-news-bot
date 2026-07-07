@@ -5,3 +5,8 @@ data/
 logs/
 secrets/*
 !secrets/.gitkeep
+
+# backups (never commit; .env backups hold secrets)
+*.bak
+*.bak.*
+crontab.bak.*
