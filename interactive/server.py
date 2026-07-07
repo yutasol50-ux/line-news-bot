@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from interactive import dispatch
 from interactive import hermes_brain
+from interactive import media_intake
 from interactive import research_async
 from shared import line_client
 
@@ -114,19 +115,27 @@ def webhook():
     now_iso = datetime.now(JST).isoformat(timespec="seconds")
     payload = request.get_json(silent=True) or {}
     for event in payload.get("events", []):
-        if event.get("type") != "message" or event.get("message", {}).get("type") != "text":
+        if event.get("type") != "message":
             continue
+        msg = event.get("message", {})
+        mtype = msg.get("type")
+        if mtype not in ("text", "image", "file"):
+            continue  # audio 等は未対応(将来STT)
         event_id = event.get("webhookEventId", "")
-        # 多重登録の防止は webhookEventId の重複排除だけで行う。
+        # 多重処理の防止は webhookEventId の重複排除だけで行う。
         # isRedelivery では弾かない: 一度も処理できなかったイベントの再送
         # (LINEがくれる再試行)まで捨ててしまい無反応になるため。
         if _seen(event_id):
             print(f"[INFO] 重複イベントをスキップ: {event_id}")
             continue
-        text = event["message"]["text"]
         reply_token = event.get("replyToken", "")
         # 即200を返してLINEのタイムアウト→再配信を防ぐ。実処理は別スレッドへ。
-        _spawn(lambda t=text, rt=reply_token: _process(t, rt, now_iso))
+        if mtype == "text":
+            text = msg["text"]
+            _spawn(lambda t=text, rt=reply_token: _process(t, rt, now_iso))
+        else:  # image / file(PDF) → 取得→読解→Hermesへ
+            mid = msg.get("id", "")
+            _spawn(lambda i=mid, k=mtype, rt=reply_token: media_intake.handle(i, k, rt))
     return "ok", 200
 
 
