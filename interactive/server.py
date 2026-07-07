@@ -18,6 +18,8 @@ from interactive import dispatch
 from interactive import hermes_brain
 from interactive import media_intake
 from interactive import research_async
+from interactive import diary_state
+from interactive import diary_collector
 from shared import line_client
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -129,6 +131,18 @@ def webhook():
             print(f"[INFO] 重複イベントをスキップ: {event_id}")
             continue
         reply_token = event.get("replyToken", "")
+        # 日記モード中は日記コレクタへ(通常Hermes/画像intakeへは進ませない)
+        if diary_state.is_active():
+            if mtype == "text":
+                t = msg["text"]
+                _spawn(lambda tx=t, rt=reply_token: diary_collector.handle_text(tx, rt))
+            else:  # image / file
+                mid = msg.get("id", "")
+                _spawn(lambda i=mid, rt=reply_token: diary_collector.handle_photo(i, rt))
+            continue
+        if mtype == "text" and msg["text"].strip() == "日記":
+            _spawn(lambda rt=reply_token: diary_collector.start_manual(rt))
+            continue
         # 即200を返してLINEのタイムアウト→再配信を防ぐ。実処理は別スレッドへ。
         if mtype == "text":
             text = msg["text"]
