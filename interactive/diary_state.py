@@ -4,6 +4,7 @@
 状態は単一JSON(_active.json)。純粋(Haiku/LINEを呼ばない)。
 """
 import json
+import os
 from pathlib import Path
 
 STATE_FILE = Path(__file__).resolve().parent.parent / "data" / "diary" / "_active.json"
@@ -18,7 +19,9 @@ def _load() -> dict:
 
 def _save(s: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, STATE_FILE)          # アトミック置換(書き込み中クラッシュで破損しない)
 
 
 def start(date: str, *, now: str) -> None:

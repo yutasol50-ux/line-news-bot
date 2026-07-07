@@ -128,6 +128,61 @@ def test_photo_fetch_failure_still_replies(tmp_path, monkeypatch):
     assert len(replies) > 0
 
 
+def test_flush_saves_and_clears_when_active_with_content(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    st.start("2026-07-07", now="2026-07-07T19:00:00+09:00")
+    st.append_text("昼の書きかけ", now="2026-07-07T19:05:00+09:00")
+    saved = {}
+    done = col.flush(
+        now_iso="2026-07-07T20:00:00+09:00",
+        compose=lambda raw, caps, date: {"title": "t", "tags": [], "body": "清書"},
+        store=type("S", (), {"save": staticmethod(lambda e: saved.update(e) or "p")}))
+    assert done is True
+    assert saved["raw"] == "昼の書きかけ" and saved["date"] == "2026-07-07"
+    assert st.is_active() is False
+
+
+def test_flush_clears_and_returns_false_when_active_but_empty(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    st.start("2026-07-07", now="2026-07-07T19:00:00+09:00")
+
+    def _no_save(e):
+        raise AssertionError("empty draft must not be saved")
+
+    done = col.flush(
+        now_iso="2026-07-07T20:00:00+09:00",
+        compose=lambda raw, caps, date: {"title": "t", "tags": [], "body": "x"},
+        store=type("S", (), {"save": staticmethod(_no_save)}))
+    assert done is False
+    assert st.is_active() is False
+
+
+def test_flush_returns_false_when_inactive(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    done = col.flush(
+        now_iso="2026-07-07T20:00:00+09:00",
+        compose=lambda raw, caps, date: {"title": "t", "tags": [], "body": "x"},
+        store=type("S", (), {"save": staticmethod(lambda e: None)}))
+    assert done is False
+
+
+def test_cancel_word_clears_and_replies_without_processing(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    st.start("2026-07-07", now="t0")
+    st.append_text("書きかけ", now="t1")
+
+    def _boom(*a, **k):
+        raise AssertionError("classify/compose/store must not run on cancel")
+
+    r = col.handle_text("やめる", "RT", now="t2",
+                        classify=_boom, compose=_boom,
+                        store=type("S", (), {"save": staticmethod(_boom)}),
+                        **dep)
+    assert r == "cancelled"
+    assert st.is_active() is False
+    assert len(replies) == 1 and "やめ" in replies[-1]
+
+
 def test_start_manual_starts_and_greets(tmp_path, monkeypatch):
     replies, dep = _setup(tmp_path, monkeypatch)
     r = col.start_manual("RT", now="2026-07-07T21:00:00+09:00", **dep)

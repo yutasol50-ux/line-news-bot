@@ -3,12 +3,33 @@
 
 依存は diary_store のみ。HTMLは自己完結(外部CSS/JSなし)。
 """
+import hmac
 import html as _html
-from flask import Blueprint, abort, send_file
+import os
+from flask import Blueprint, abort, g, request, send_file
 
 from interactive import diary_store
 
 bp = Blueprint("diary", __name__)
+
+
+@bp.before_request
+def _require_token():
+    token = os.environ.get("DIARY_TOKEN", "")
+    if not token:
+        abort(403)                       # fail closed: 未設定なら公開しない
+    provided = request.cookies.get("diary_token") or request.args.get("k", "")
+    if not hmac.compare_digest(str(provided), token):
+        abort(403)
+    g._diary_set_cookie = bool(request.args.get("k"))
+
+
+@bp.after_request
+def _persist_token(resp):
+    if getattr(g, "_diary_set_cookie", False):
+        resp.set_cookie("diary_token", os.environ.get("DIARY_TOKEN", ""),
+                        max_age=60*60*24*365, httponly=True, samesite="Lax")
+    return resp
 
 _PAGE = """<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

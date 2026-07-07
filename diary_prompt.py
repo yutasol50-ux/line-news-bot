@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from interactive import diary_state
-from interactive.diary_collector import finalize_timeout
+from interactive.diary_collector import finalize_timeout, flush
 from shared import line_client
 
 _JST = timezone(timedelta(hours=9))
@@ -20,12 +20,21 @@ _GREETING = "今日はどうだった?📔 一日を教えて。箇条書きで�
 def run(*, now_iso=None) -> None:
     now_iso = now_iso or datetime.now(_JST).isoformat(timespec="seconds")
     try:
-        finalize_timeout(now_iso=now_iso)
+        flush(now_iso=now_iso)          # 書きかけを保存してから新規開始(消失防止)
     except Exception as e:
-        print(f"[WARN] diary_prompt finalize: {e}")
+        print(f"[WARN] diary_prompt flush: {e}")
     diary_state.start(now_iso[:10], now=now_iso)
     line_client.push(_GREETING)
 
 
+def reap(*, now_iso=None) -> None:
+    now_iso = now_iso or datetime.now(_JST).isoformat(timespec="seconds")
+    try:
+        finalize_timeout(now_iso=now_iso)
+    except Exception as e:
+        print(f"[WARN] diary_prompt reap: {e}")
+
+
 if __name__ == "__main__":
-    run()
+    import sys
+    (reap if len(sys.argv) > 1 and sys.argv[1] == "reap" else run)()

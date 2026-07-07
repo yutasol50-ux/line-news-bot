@@ -27,6 +27,8 @@ cat >> "$TEMP" << EOF
 30 5 * * * cd $SCRIPT_DIR && git pull --quiet 2>/dev/null; $PYTHON $SCRIPT_DIR/secretary.py >> $LOG_DIR/secretary.log 2>&1
 # 夜20:00: 日記の声かけ(今日どうだった?)
 0 20 * * * cd $SCRIPT_DIR && $PYTHON $SCRIPT_DIR/diary_prompt.py >> $LOG_DIR/diary.log 2>&1
+# 深夜2:00: 書きかけの古い日記を自動で確定保存(取りこぼし回収)
+0 2 * * * cd $SCRIPT_DIR && $PYTHON $SCRIPT_DIR/diary_prompt.py reap >> $LOG_DIR/diary.log 2>&1
 # ==================================================
 EOF
 
