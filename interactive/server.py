@@ -20,6 +20,7 @@ from interactive import media_intake
 from interactive import research_async
 from interactive import diary_state
 from interactive import diary_collector
+from interactive import diary_web
 from shared import line_client
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -27,6 +28,7 @@ CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 JST = timezone(timedelta(hours=9))
 
 app = Flask(__name__)
+app.register_blueprint(diary_web.bp)
 
 # --- 重複処理の防止 ---------------------------------------------------------
 # LINEは応答が遅い/失敗すると同じイベントを再配信する(at-least-once)。
