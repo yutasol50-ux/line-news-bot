@@ -33,3 +33,9 @@ def test_compose_falls_back_on_bad_json(monkeypatch):
     monkeypatch.setattr(dc.requests, "post", lambda *a, **k: _Resp("これはJSONじゃない"))
     out = dc.compose("原文テキスト", date="2026-07-07")
     assert out["body"] == "原文テキスト"       # パース不能でも原文で保存
+
+
+def test_compose_none_raw_never_raises(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    out = dc.compose(None, date="2026-07-07")   # 例外を出してはいけない
+    assert out == {"title": "2026-07-07", "tags": [], "body": ""}

@@ -31,7 +31,7 @@ _PROMPT = (
 
 
 def _fallback(raw: str, date: str) -> dict:
-    return {"title": date, "tags": [], "body": raw.strip()}
+    return {"title": date, "tags": [], "body": (raw or "").strip()}
 
 
 def _extract_json(text: str):
