@@ -84,6 +84,50 @@ def test_finalize_timeout_saves_stale_draft(tmp_path, monkeypatch):
     assert st.is_active() is False
 
 
+def test_finalize_timeout_respects_grace_before_cutoff(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    st.start("2026-07-06", now="2026-07-06T23:50:00+09:00")
+    st.append_text("日付またぎ中", now="2026-07-07T00:05:00+09:00")
+    saved = {}
+    done = col.finalize_timeout(
+        now_iso="2026-07-07T00:10:00+09:00",
+        compose=lambda raw, caps, date: {"title": "t", "tags": [], "body": "清書"},
+        store=type("S", (), {"save": staticmethod(lambda e: saved.update(e) or "p")}))
+    assert done is False
+    assert saved == {}
+    assert st.is_active() is True
+
+
+def test_confirm_reject_reopens_without_saving(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    st.start("2026-07-07", now="t0")
+    st.append_text("原文", now="t1")
+    st.set_confirming({"title": "当務", "tags": [], "body": "本文"}, now="t2")
+
+    def _no_save(e):
+        raise AssertionError("store.save should not be called on reject")
+
+    r = col.handle_text("ちがう", "RT", now="t3",
+                        classify=lambda t: "reject",
+                        store=type("S", (), {"save": staticmethod(_no_save)}),
+                        **dep)
+    assert r == "reopened"
+    assert st.phase() == "collecting"
+    assert st.is_active() is True
+
+
+def test_photo_fetch_failure_still_replies(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    st.start("2026-07-07", now="t0")
+
+    def _fail(mid):
+        raise RuntimeError("net")
+
+    r = col.handle_photo("MID", "RT", now="t1", fetch=_fail, **dep)
+    assert r == "photo_fail"
+    assert len(replies) > 0
+
+
 def test_start_manual_starts_and_greets(tmp_path, monkeypatch):
     replies, dep = _setup(tmp_path, monkeypatch)
     r = col.start_manual("RT", now="2026-07-07T21:00:00+09:00", **dep)

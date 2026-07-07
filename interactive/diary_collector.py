@@ -100,11 +100,10 @@ def finalize_timeout(*, now_iso, cutoff_hour=2, compose=diary_compose.compose,
     """activeな下書きが「別日 or 当日cutoff_hour超え」なら自動清書・自動保存。"""
     if not state.is_active():
         return False
-    last = state.last() or ""
     now_date = now_iso[:10]
     entry_date = state.date() or now_date
     now_hour = int(now_iso[11:13]) if len(now_iso) >= 13 else 0
-    stale = (entry_date < now_date) or (last[:10] < now_date and now_hour >= cutoff_hour)
+    stale = (entry_date < now_date) and (now_hour >= cutoff_hour)
     if not stale:
         return False
     composed = compose(state.raw(), state.captions(), date=entry_date)
