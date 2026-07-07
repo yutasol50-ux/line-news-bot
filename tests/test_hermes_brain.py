@@ -27,7 +27,9 @@ def test_ask_returns_content(monkeypatch):
     out = hb.ask("こんにちは", "line-owner")
     assert out == "やあ、了解！"
     assert captured["headers"]["X-Hermes-Session-Id"] == "line-owner"
-    assert captured["json"]["messages"][0]["content"] == "こんにちは"
+    # messages[0]=system(振る舞い指示), 末尾=ユーザー本文(日時プレフィックス付き)
+    assert captured["json"]["messages"][0]["role"] == "system"
+    assert "こんにちは" in captured["json"]["messages"][-1]["content"]
 
 
 def test_ask_on_error_returns_safe_message(monkeypatch):
