@@ -76,7 +76,7 @@ def test_finalize_timeout_saves_stale_draft(tmp_path, monkeypatch):
     st.append_text("寝落ち分", now="2026-07-06T21:05:00+09:00")
     saved = {}
     done = col.finalize_timeout(
-        now_iso="2026-07-07T02:30:00+09:00",
+        now_iso="2026-07-07T05:00:00+09:00",   # 4時を過ぎたので前日(7/6)は確定
         compose=lambda raw, caps, date: {"title": "t", "tags": [], "body": "清書"},
         store=type("S", (), {"save": staticmethod(lambda e: saved.update(e) or "p")}))
     assert done is True
@@ -90,11 +90,25 @@ def test_finalize_timeout_respects_grace_before_cutoff(tmp_path, monkeypatch):
     st.append_text("日付またぎ中", now="2026-07-07T00:05:00+09:00")
     saved = {}
     done = col.finalize_timeout(
-        now_iso="2026-07-07T00:10:00+09:00",
+        now_iso="2026-07-07T03:30:00+09:00",   # まだ4時前=7/6の夜扱い→確定しない
         compose=lambda raw, caps, date: {"title": "t", "tags": [], "body": "清書"},
         store=type("S", (), {"save": staticmethod(lambda e: saved.update(e) or "p")}))
     assert done is False
     assert saved == {}
+
+
+def test_diary_day_4am_cutoff():
+    # 深夜4時までは前日扱い
+    assert col.diary_day("2026-07-08T00:25:00+09:00") == "2026-07-07"
+    assert col.diary_day("2026-07-08T03:59:00+09:00") == "2026-07-07"
+    assert col.diary_day("2026-07-08T04:30:00+09:00") == "2026-07-08"
+    assert col.diary_day("2026-07-08T20:00:00+09:00") == "2026-07-08"
+
+
+def test_start_manual_after_midnight_files_as_previous_day(tmp_path, monkeypatch):
+    replies, dep = _setup(tmp_path, monkeypatch)
+    col.start_manual("RT", now="2026-07-08T01:00:00+09:00", **dep)
+    assert st.date() == "2026-07-07"   # 深夜1時に書き始め→前日の日記
     assert st.is_active() is True
 
 

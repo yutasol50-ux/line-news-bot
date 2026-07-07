@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from interactive import diary_state
-from interactive.diary_collector import finalize_timeout, flush
+from interactive.diary_collector import finalize_timeout, flush, diary_day
 from shared import line_client
 
 _JST = timezone(timedelta(hours=9))
@@ -25,7 +25,7 @@ def run(*, now_iso=None) -> None:
         # 保存に失敗したら新規開始しない(書きかけを02:00の刈取りに残す=消さない)
         print(f"[WARN] diary_prompt flush failed, skip start: {e}")
         return
-    diary_state.start(now_iso[:10], now=now_iso)
+    diary_state.start(diary_day(now_iso), now=now_iso)
     line_client.push(_GREETING)
 
 

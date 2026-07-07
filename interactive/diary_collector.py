@@ -16,6 +16,17 @@ from interactive.vision import read as _vision_read
 from shared import line_client
 
 _JST = timezone(timedelta(hours=9))
+_DIARY_CUTOFF_HOUR = 4  # 深夜4時までは前日扱い(夜更かし対応)。日付は now から4時間引いて決める。
+
+
+def diary_day(now_iso: str, cutoff_hour: int = _DIARY_CUTOFF_HOUR) -> str:
+    """日記上の"その日"(YYYY-MM-DD)。深夜cutoff_hour時までは前日扱い。
+    例: 2026-07-08T00:25 → (−4h) 2026-07-07。パース不能時は素の日付にフォールバック。"""
+    try:
+        return (datetime.fromisoformat(now_iso) - timedelta(hours=cutoff_hour)).date().isoformat()
+    except Exception:
+        return now_iso[:10]
+
 
 _GREETING = "日記モードにするね📔 今日はどうだった? 書き終わったら「終わり」って言ってね。"
 _ASK = "メモしたよ📔 これでいい?(まだ書くなら続けてね)"
@@ -99,15 +110,15 @@ def handle_photo(message_id, reply_token, *, now=None,
     return "photo_added"
 
 
-def finalize_timeout(*, now_iso, cutoff_hour=2, compose=diary_compose.compose,
+def finalize_timeout(*, now_iso, cutoff_hour=_DIARY_CUTOFF_HOUR, compose=diary_compose.compose,
                      store=_store, state=_state) -> bool:
-    """activeな下書きが「別日 or 当日cutoff_hour超え」なら自動清書・自動保存。"""
+    """activeな下書きの"日記日"が今の"日記日"より前(=前日以前)なら自動清書・自動保存。
+    深夜cutoff_hour時までは同日扱いなので、その間は確定しない(書き足し猶予)。"""
     if not state.is_active():
         return False
-    now_date = now_iso[:10]
-    entry_date = state.date() or now_date
-    now_hour = int(now_iso[11:13]) if len(now_iso) >= 13 else 0
-    stale = (entry_date < now_date) and (now_hour >= cutoff_hour)
+    today = diary_day(now_iso, cutoff_hour)
+    entry_date = state.date() or today
+    stale = entry_date < today
     if not stale:
         return False
     composed = compose(state.raw(), state.captions(), date=entry_date)
@@ -143,7 +154,7 @@ def start_manual(reply_token, *, now=None, state=_state, start=None,
                  reply=line_client.reply) -> str:
     """ユーザーが明示的に「日記」等で日記モードを開始した時の入口。"""
     now = now or _now()
-    today = now[:10]
+    today = diary_day(now)
     starter = start or state.start
     starter(today, now=now)
     reply(reply_token, _GREETING)
