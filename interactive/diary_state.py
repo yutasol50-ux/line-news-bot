@@ -19,9 +19,9 @@ def _load() -> dict:
 
 def _save(s: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp = STATE_FILE.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, STATE_FILE)          # アトミック置換(書き込み中クラッシュで破損しない)
+    os.replace(tmp, STATE_FILE)          # アトミック置換(プロセス毎tmpで衝突回避)
 
 
 def start(date: str, *, now: str) -> None:

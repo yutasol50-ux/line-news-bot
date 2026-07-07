@@ -36,6 +36,20 @@ def test_run_saves_same_day_in_progress_draft(tmp_path, monkeypatch):
     assert st.is_active() is True
 
 
+def test_run_flush_failure_skips_start_and_push(monkeypatch):
+    """flushが失敗したら、start()とpush()を呼ばない(下書き消失防止)。"""
+    events = []
+    monkeypatch.setattr(diary_prompt, "flush",
+                        lambda **k: (_ for _ in ()).throw(IOError("disk write failed")))
+    monkeypatch.setattr(diary_prompt.diary_state, "start",
+                        lambda date, now: events.append(("start", date)))
+    monkeypatch.setattr(diary_prompt.line_client, "push",
+                        lambda text: events.append(("push", text)))
+    diary_prompt.run(now_iso="2026-07-07T20:00:00+09:00")
+    # flushが失敗したので、start()とpush()は呼ばれない
+    assert len(events) == 0
+
+
 def test_reap_invokes_finalize_timeout(monkeypatch):
     called = []
     monkeypatch.setattr(diary_prompt, "finalize_timeout",

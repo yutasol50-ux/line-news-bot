@@ -22,7 +22,9 @@ def run(*, now_iso=None) -> None:
     try:
         flush(now_iso=now_iso)          # 書きかけを保存してから新規開始(消失防止)
     except Exception as e:
-        print(f"[WARN] diary_prompt flush: {e}")
+        # 保存に失敗したら新規開始しない(書きかけを02:00の刈取りに残す=消さない)
+        print(f"[WARN] diary_prompt flush failed, skip start: {e}")
+        return
     diary_state.start(now_iso[:10], now=now_iso)
     line_client.push(_GREETING)
 
