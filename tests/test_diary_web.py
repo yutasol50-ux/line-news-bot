@@ -35,3 +35,31 @@ def test_missing_media_is_404(monkeypatch, tmp_path):
     monkeypatch.setattr(diary_store, "DIARY_DIR", tmp_path)
     c = _client(monkeypatch, [])
     assert c.get("/diary/media/2026-07-07/nope.jpg").status_code == 404
+
+
+def test_path_traversal_is_blocked(monkeypatch, tmp_path):
+    monkeypatch.setattr(diary_store, "DIARY_DIR", tmp_path)
+    c = _client(monkeypatch, [])
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    (tmp_path / "media" / "2026-07-07").mkdir(parents=True)
+
+    r1 = c.get("/diary/media/2026-07-07/..%2f..%2fsecret.txt")
+    assert r1.status_code == 404
+    assert b"TOPSECRET" not in r1.get_data()
+
+    r2 = c.get("/diary/media/2026-07-07/../../secret.txt")
+    assert r2.status_code == 404
+    assert b"TOPSECRET" not in r2.get_data()
+
+
+def test_legit_media_is_served(monkeypatch, tmp_path):
+    monkeypatch.setattr(diary_store, "DIARY_DIR", tmp_path)
+    c = _client(monkeypatch, [])
+    media_dir = tmp_path / "media" / "2026-07-07"
+    media_dir.mkdir(parents=True)
+    (media_dir / "1.jpg").write_bytes(b"JPG")
+
+    r = c.get("/diary/media/2026-07-07/1.jpg")
+    assert r.status_code == 200
+    assert r.get_data() == b"JPG"

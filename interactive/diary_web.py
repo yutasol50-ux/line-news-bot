@@ -66,7 +66,11 @@ def diary_index():
 
 @bp.get("/diary/media/<date>/<path:filename>")
 def diary_media(date, filename):
-    p = diary_store.media_path(date, filename)
-    if not p.exists():
+    base = (diary_store.DIARY_DIR / "media").resolve()
+    p = diary_store.media_path(date, filename).resolve()
+    # containment: p must be strictly under base (blocks ../ traversal & symlinks)
+    if base not in p.parents:
+        abort(404)
+    if not p.is_file():
         abort(404)
     return send_file(str(p))
