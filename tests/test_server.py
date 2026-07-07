@@ -82,3 +82,48 @@ def test_redelivery_of_seen_event_is_skipped(monkeypatch):
     _post(client, [_event(event_id="R2")])
     _post(client, [_event(event_id="R2", redelivery=True)])
     assert calls == ["明日歯医者"]
+
+
+def _setup_media(monkeypatch, calls):
+    """署名OK・同期spawn・media_intake.handleを記録するスタブ。"""
+    monkeypatch.setattr(server, "CHANNEL_SECRET", SECRET)
+    monkeypatch.setattr(server, "verify_signature", lambda b, s: True)
+    monkeypatch.setattr(server, "_spawn", lambda fn: fn())
+    monkeypatch.setattr(server.media_intake, "handle",
+                        lambda mid, kind, rt: calls.append((mid, kind, rt)))
+    server._seen_ids.clear()
+    server._seen_set.clear()
+
+
+def _media_event(mtype="image", mid="M1", event_id="E9", reply_token="RT",
+                 file_name=None):
+    msg = {"type": mtype, "id": mid}
+    if file_name:
+        msg["fileName"] = file_name
+    return {"type": "message", "replyToken": reply_token, "webhookEventId": event_id,
+            "deliveryContext": {"isRedelivery": False}, "message": msg}
+
+
+def test_webhook_routes_image_to_media_intake(monkeypatch):
+    calls = []
+    _setup_media(monkeypatch, calls)
+    r = _post(server.app.test_client(), [_media_event(mtype="image", mid="IMG1")])
+    assert r.status_code == 200
+    assert calls == [("IMG1", "image", "RT")]
+
+
+def test_webhook_routes_file_to_media_intake(monkeypatch):
+    calls = []
+    _setup_media(monkeypatch, calls)
+    r = _post(server.app.test_client(),
+              [_media_event(mtype="file", mid="F1", file_name="請求書.pdf")])
+    assert r.status_code == 200
+    assert calls == [("F1", "file", "RT")]
+
+
+def test_webhook_ignores_audio(monkeypatch):
+    calls = []
+    _setup_media(monkeypatch, calls)
+    r = _post(server.app.test_client(), [_media_event(mtype="audio", mid="A1")])
+    assert r.status_code == 200
+    assert calls == []                         # 音声は未対応(スコープ外)
