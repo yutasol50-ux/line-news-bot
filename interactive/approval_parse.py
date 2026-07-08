@@ -18,14 +18,14 @@ def is_prompt(capture_text: str) -> bool:
     return has_marker and n_choices >= 2
 
 
-def parse(capture_text: str):
+def parse(capture_text: str) -> dict | None:
     """`{"question", "choices":[{"key","label"}]}` or None。"""
     if not is_prompt(capture_text):
         return None
     question = ""
-    for m in _PROMPT_MARKERS:
-        if m in capture_text:
-            question = m
+    for ln in _lines(capture_text):
+        if any(mk in ln for mk in _PROMPT_MARKERS):
+            question = ln.strip()
             break
     choices = []
     for ln in _lines(capture_text):

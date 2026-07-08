@@ -17,6 +17,15 @@ IDLE = """\
   ? for shortcuts
 """
 
+PROMPT_EDIT = """\
+● Update(auth.py)
+
+Do you want to make this edit to auth.py?
+❯ 1. Yes
+  2. Yes, allow all edits during this session
+  3. No, and tell Claude what to do differently (esc)
+"""
+
 
 def test_is_prompt_true_on_permission_prompt():
     assert ap.is_prompt(PROMPT) is True
@@ -37,3 +46,9 @@ def test_parse_extracts_question_and_choices():
 
 def test_parse_returns_none_on_idle():
     assert ap.parse(IDLE) is None
+
+
+def test_parse_keeps_full_question_line_for_edit_prompt():
+    r = ap.parse(PROMPT_EDIT)
+    assert r["question"] == "Do you want to make this edit to auth.py?"
+    assert [c["key"] for c in r["choices"]] == ["1", "2", "3"]
