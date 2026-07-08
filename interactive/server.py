@@ -141,6 +141,31 @@ def approval_notify():
     return {"token": token}, 200
 
 
+def handle_postback(data: str, user_id: str) -> None:
+    """LINEクイックリプライのタップを受けて tmux に注入する(本人・再検証つき)。"""
+    if user_id != line_client.LINE_USER_ID:
+        return  # 本人以外は無視
+    if not data.startswith("approve:"):
+        return
+    parts = data.split(":")
+    if len(parts) != 3:
+        return
+    _, token, key = parts
+    entry = approval_store.get(token)
+    if entry is None:
+        line_client.push("この承認はもう解決済みでした。")
+        return
+    pane = entry["pane"]
+    if not approval_parse.is_prompt(tmux_inject.capture(pane)):
+        approval_store.resolve(token)
+        line_client.push("席で先に答えたようなので、送りませんでした。")
+        return
+    ok = tmux_inject.send_key(pane, key)
+    approval_store.resolve(token)
+    label = next((c["label"] for c in entry["choices"] if c["key"] == key), "")
+    line_client.push(f"✅ 送信しました（{key}. {label}）" if ok else "⚠️ 送信に失敗しました。")
+
+
 @app.post("/webhook")
 def webhook():
     body = request.get_data()
@@ -150,6 +175,14 @@ def webhook():
     now_iso = datetime.now(JST).isoformat(timespec="seconds")
     payload = request.get_json(silent=True) or {}
     for event in payload.get("events", []):
+        if event.get("type") == "postback":
+            event_id = event.get("webhookEventId", "")
+            if _seen(event_id):
+                continue
+            uid = event.get("source", {}).get("userId", "")
+            pb = event.get("postback", {}).get("data", "")
+            _spawn(lambda d=pb, u=uid: handle_postback(d, u))
+            continue
         if event.get("type") != "message":
             continue
         msg = event.get("message", {})
