@@ -10,3 +10,4 @@ secrets/*
 *.bak
 *.bak.*
 crontab.bak.*
+scratch/
