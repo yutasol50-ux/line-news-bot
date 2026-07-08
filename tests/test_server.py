@@ -31,6 +31,9 @@ def _setup(monkeypatch, calls):
     monkeypatch.setattr(server.dispatch, "handle",
                         lambda t, n: calls.append(t) or "OK登録")
     monkeypatch.setattr(server.line_client, "reply", lambda rt, msg: True)
+    # 本物の日記state(data/diary/_active.json)から隔離。
+    # 隔離しないと、毎晩20時に日記がactiveになるたびwebhookが日記コレクタへ流れて落ちる。
+    monkeypatch.setattr(server.diary_state, "is_active", lambda: False)
     # 重複判定の状態をテスト間でリセット
     server._seen_ids.clear()
     server._seen_set.clear()
@@ -91,6 +94,8 @@ def _setup_media(monkeypatch, calls):
     monkeypatch.setattr(server, "_spawn", lambda fn: fn())
     monkeypatch.setattr(server.media_intake, "handle",
                         lambda mid, kind, rt: calls.append((mid, kind, rt)))
+    # 本物の日記stateから隔離(_setup と同じ理由)。
+    monkeypatch.setattr(server.diary_state, "is_active", lambda: False)
     server._seen_ids.clear()
     server._seen_set.clear()
 
