@@ -5,6 +5,7 @@ import sys
 import base64
 import hashlib
 import hmac
+import secrets
 import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -21,6 +22,9 @@ from interactive import research_async
 from interactive import diary_state
 from interactive import diary_collector
 from interactive import diary_web
+from interactive import approval_parse
+from interactive import approval_store
+from interactive import tmux_inject
 from shared import line_client
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -108,6 +112,33 @@ def capture():
         line_client.push(f"🎙️ Watch:「{text}」\n\n{reply}")
     # route=='async' の時は handle_capture の裏スレッドが完成レポートを push する。
     return {"reply": reply}, 200
+
+
+@app.post("/approval/notify")
+def approval_notify():
+    """Notificationフックからの通知。承認プロンプトをLINEクイックリプライで push。"""
+    server_token = os.environ.get("APPROVAL_TOKEN", "")
+    if not server_token:
+        abort(503)
+    sent = request.headers.get("X-Approval-Token", "")
+    if not hmac.compare_digest(str(sent), server_token):
+        abort(401)
+    data = request.get_json(silent=True) or {}
+    parsed = approval_parse.parse(data.get("capture", ""))
+    if not parsed:
+        return "", 204  # もう承認待ちでない/解析不能 → 何もしない
+    token = secrets.token_hex(4)
+    now_iso = datetime.now(JST).isoformat(timespec="seconds")
+    approval_store.register(
+        data.get("pane", ""), data.get("cwd", ""),
+        parsed["question"], parsed["choices"], now_iso=now_iso, token=token,
+    )
+    cwd = data.get("cwd", "")
+    header = f"🔐 承認待ち{f' [{cwd}]' if cwd else ''}\n{parsed['question']}"
+    items = [{"label": f'{c["key"]}. {c["label"]}', "data": f'approve:{token}:{c["key"]}'}
+             for c in parsed["choices"]]
+    line_client.push_quick_reply(header, items)
+    return {"token": token}, 200
 
 
 @app.post("/webhook")

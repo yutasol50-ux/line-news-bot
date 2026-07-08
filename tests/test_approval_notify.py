@@ -1,0 +1,50 @@
+import importlib
+from unittest.mock import patch
+
+
+def _client(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPROVAL_TOKEN", "sekret")
+    monkeypatch.setenv("APPROVAL_STORE", str(tmp_path / "p.json"))
+    from interactive import server
+    importlib.reload(server)
+    server.app.config["TESTING"] = True
+    return server
+
+
+PROMPT = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No (esc)\n"
+
+
+def test_notify_registers_and_pushes(tmp_path, monkeypatch):
+    server = _client(tmp_path, monkeypatch)
+    with patch("interactive.server.line_client.push_quick_reply", return_value=True) as push:
+        r = server.app.test_client().post(
+            "/approval/notify",
+            json={"pane": "%3", "cwd": "~/x", "capture": PROMPT},
+            headers={"X-Approval-Token": "sekret"},
+        )
+    assert r.status_code == 200
+    tok = r.get_json()["token"]
+    from interactive import approval_store
+    assert approval_store.get(tok)["pane"] == "%3"
+    assert push.called
+    # ボタンの data は approve:<token>:<key>
+    items = push.call_args[0][1]
+    assert items[0]["data"] == f"approve:{tok}:1"
+
+
+def test_notify_rejects_bad_token(tmp_path, monkeypatch):
+    server = _client(tmp_path, monkeypatch)
+    r = server.app.test_client().post(
+        "/approval/notify", json={"pane": "%3", "cwd": "", "capture": PROMPT},
+        headers={"X-Approval-Token": "wrong"})
+    assert r.status_code == 401
+
+
+def test_notify_ignores_non_prompt(tmp_path, monkeypatch):
+    server = _client(tmp_path, monkeypatch)
+    with patch("interactive.server.line_client.push_quick_reply") as push:
+        r = server.app.test_client().post(
+            "/approval/notify", json={"pane": "%3", "cwd": "", "capture": "idle\n❯\n"},
+            headers={"X-Approval-Token": "sekret"})
+    assert r.status_code == 204
+    assert not push.called
