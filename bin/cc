@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# bin/cc — Claude Code を常駐 tmux セッション内で起動(何回打っても同じ 'claude' セッションに戻る)。
+# 遠隔承認は Claude Code が tmux 内で動いていることが前提(tmux send-keys で注入するため)。
+exec tmux new-session -A -s claude "claude ${*}"
