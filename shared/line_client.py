@@ -53,3 +53,37 @@ def reply(reply_token: str, text: str) -> bool:
     except Exception as e:
         print(f"[WARN] reply例外→pushへ: {e}")
     return push(text)
+
+
+def push_quick_reply(text: str, items: list) -> bool:
+    """text + クイックリプライ(postback)を1メッセージで push。
+
+    items: [{"label": 表示ラベル, "data": postbackデータ}]。ラベルは20字上限に丸める。
+    LINE の quickReply は最大13個。超過分は切り捨て(呼び出し側で警告済みの想定)。
+    """
+    qr_items = [
+        {
+            "type": "action",
+            "action": {
+                "type": "postback",
+                "label": it["label"][:20],
+                "data": it["data"],
+                "displayText": it["label"][:20],
+            },
+        }
+        for it in items[:13]
+    ]
+    message = {"type": "text", "text": text[:4900], "quickReply": {"items": qr_items}}
+    try:
+        resp = requests.post(
+            "https://api.line.me/v2/bot/message/push",
+            headers=_HEADERS,
+            json={"to": LINE_USER_ID, "messages": [message]},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            return True
+        print(f"[ERROR] quick-reply push失敗: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"[ERROR] quick-reply push例外: {e}")
+    return False
