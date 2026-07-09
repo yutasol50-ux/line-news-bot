@@ -45,6 +45,24 @@ def test_notify_also_triggers_pushcut(tmp_path, monkeypatch):
     assert pc.called  # Pushcut にも通知
 
 
+def test_notify_also_triggers_bark_with_icon(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARK_APPROVAL_ICON", "https://example.com/lock.png")
+    server = _client(tmp_path, monkeypatch)
+    with patch("interactive.server.line_client.push_quick_reply", return_value=True), \
+         patch("interactive.server.pushcut_client.notify", return_value=True), \
+         patch("interactive.server.bark_client.notify", return_value=True) as bk:
+        r = server.app.test_client().post(
+            "/approval/notify",
+            json={"pane": "%3", "cwd": "~/x", "capture": PROMPT},
+            headers={"X-Approval-Token": "sekret"},
+        )
+    assert r.status_code == 200
+    assert bk.called  # Bark にも通知
+    kwargs = bk.call_args.kwargs
+    assert kwargs.get("icon") == "https://example.com/lock.png"  # 鍵アイコン
+    assert kwargs.get("group") == "approval"
+
+
 def test_notify_rejects_bad_token(tmp_path, monkeypatch):
     server = _client(tmp_path, monkeypatch)
     r = server.app.test_client().post(

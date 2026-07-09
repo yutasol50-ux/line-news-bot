@@ -27,6 +27,7 @@ from interactive import approval_store
 from interactive import tmux_inject
 from shared import line_client
 from shared import pushcut_client
+from shared import bark_client
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -142,6 +143,12 @@ def approval_notify():
     # Pushcut にも即通知(腕から承認ボタン)。未設定なら no-op。
     # 動的タイトル/本文は Pushcut PRO 機能なので送らない(名前で鳴らすだけ=無料枠)。
     pushcut_client.notify()
+    # Bark にも通知(鍵アイコンで「承認だ」と一目で分かる)。未設定なら no-op。
+    bark_client.notify(
+        "🔐 承認待ち", parsed["question"],
+        icon=os.environ.get("BARK_APPROVAL_ICON", ""),
+        group="approval",
+    )
     return {"token": token}, 200
 
 
