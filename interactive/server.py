@@ -139,16 +139,17 @@ def approval_notify():
     header = f"🔐 承認待ち{f' [{cwd}]' if cwd else ''}\n{parsed['question']}"
     items = [{"label": f'{c["key"]}. {c["label"]}', "data": f'approve:{token}:{c["key"]}'}
              for c in parsed["choices"]]
-    line_client.push_quick_reply(header, items)
-    # Pushcut にも即通知(腕から承認ボタン)。未設定なら no-op。
-    # 動的タイトル/本文は Pushcut PRO 機能なので送らない(名前で鳴らすだけ=無料枠)。
-    pushcut_client.notify()
-    # Bark にも通知(鍵アイコンで「承認だ」と一目で分かる)。未設定なら no-op。
+    # 速い通知専用サービス(Bark/Pushcut)を先に飛ばし、遅めのLINEは最後に。
+    # Bark: 鍵アイコンで「承認だ」と一目で分かる。未設定なら no-op。
     bark_client.notify(
         "🔐 承認待ち", parsed["question"],
         icon=os.environ.get("BARK_APPROVAL_ICON", ""),
         group="approval",
     )
+    # Pushcut: 腕から承認ボタン。動的タイトル/本文はPRO機能なので送らない(名前で鳴らすだけ)。
+    pushcut_client.notify()
+    # LINE: 遅めだが記録が残る＆クイックリプライ。最後に。
+    line_client.push_quick_reply(header, items)
     return {"token": token}, 200
 
 
