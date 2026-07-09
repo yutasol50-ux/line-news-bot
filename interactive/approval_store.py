@@ -53,3 +53,8 @@ def resolve(token: str) -> None:
 
 def pending_panes() -> list:
     return [e["pane"] for e in _load().values() if e.get("state") == "pending"]
+
+
+def pending_entries() -> list:
+    """pending なエントリを丸ごと返す(token/question/choices/pane/cwd/created 込み)。"""
+    return [e for e in _load().values() if e.get("state") == "pending"]

@@ -141,6 +141,30 @@ def approval_notify():
     return {"token": token}, 200
 
 
+def _resolve_and_inject(token: str, key: str):
+    """token+key で tmux に注入する共通処理(再検証つき)。
+    戻り値 (status, message):
+      - "gone"   … その承認はもう無い/解決済み
+      - "stale"  … 席で先に答えた(承認プロンプトでない) → resolve のみ
+      - "done"   … 注入成功 → resolve
+      - "failed" … send-keys 失敗
+    LINE/ショートカット双方から使う(ここでは push しない)。
+    """
+    entry = approval_store.get(token)
+    if entry is None:
+        return "gone", "この承認はもう解決済みでした。"
+    pane = entry["pane"]
+    if not approval_parse.is_prompt(tmux_inject.capture(pane)):
+        approval_store.resolve(token)
+        return "stale", "席で先に答えたようなので、送りませんでした。"
+    ok = tmux_inject.send_key(pane, key)
+    approval_store.resolve(token)
+    label = next((c["label"] for c in entry["choices"] if c["key"] == key), "")
+    if ok:
+        return "done", f"✅ 送信しました（{key}. {label}）"
+    return "failed", "⚠️ 送信に失敗しました。"
+
+
 def handle_postback(data: str, user_id: str) -> None:
     """LINEクイックリプライのタップを受けて tmux に注入する(本人・再検証つき)。"""
     if user_id != line_client.LINE_USER_ID:
@@ -151,19 +175,52 @@ def handle_postback(data: str, user_id: str) -> None:
     if len(parts) != 3:
         return
     _, token, key = parts
-    entry = approval_store.get(token)
-    if entry is None:
-        line_client.push("この承認はもう解決済みでした。")
-        return
-    pane = entry["pane"]
-    if not approval_parse.is_prompt(tmux_inject.capture(pane)):
-        approval_store.resolve(token)
-        line_client.push("席で先に答えたようなので、送りませんでした。")
-        return
-    ok = tmux_inject.send_key(pane, key)
-    approval_store.resolve(token)
-    label = next((c["label"] for c in entry["choices"] if c["key"] == key), "")
-    line_client.push(f"✅ 送信しました（{key}. {label}）" if ok else "⚠️ 送信に失敗しました。")
+    _status, msg = _resolve_and_inject(token, key)
+    line_client.push(msg)
+
+
+@app.get("/approval/pending")
+def approval_pending():
+    """ショートカット用: 今の承認待ち(最新1件)を返す。X-Approval-Token 認証。"""
+    server_token = os.environ.get("APPROVAL_TOKEN", "")
+    if not server_token:
+        abort(503)
+    sent = request.headers.get("X-Approval-Token", "")
+    if not hmac.compare_digest(str(sent), server_token):
+        abort(401)
+    entries = sorted(
+        approval_store.pending_entries(),
+        key=lambda e: e.get("created", ""), reverse=True,
+    )
+    current = entries[0] if entries else None
+    return {
+        "pending": bool(current),
+        "current": ({
+            "token": current["token"],
+            "question": current["question"],
+            "choices": current["choices"],
+            "cwd": current.get("cwd", ""),
+        } if current else None),
+        "count": len(entries),
+    }, 200
+
+
+@app.post("/approval/answer")
+def approval_answer():
+    """ショートカット用: {token, key} を受けて注入。X-Approval-Token 認証。"""
+    server_token = os.environ.get("APPROVAL_TOKEN", "")
+    if not server_token:
+        abort(503)
+    sent = request.headers.get("X-Approval-Token", "")
+    if not hmac.compare_digest(str(sent), server_token):
+        abort(401)
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token", ""))
+    key = str(data.get("key", ""))
+    if not token or not key:
+        abort(400)
+    status, msg = _resolve_and_inject(token, key)
+    return {"status": status, "message": msg}, 200
 
 
 @app.post("/webhook")
