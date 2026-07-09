@@ -129,6 +129,21 @@ def test_answer_key_from_query_string(tmp_path, monkeypatch):
     send.assert_called_once_with("%3", "1")
 
 
+def test_answer_key_strips_whitespace(tmp_path, monkeypatch):
+    """key に改行や空白が紛れても(Pushcut等の入力ミス) 1 として扱う。"""
+    server = _client(tmp_path, monkeypatch)
+    from interactive import approval_store
+    approval_store.register("%3", "~/x", "Q", [{"key": "1", "label": "Yes"}],
+                            now_iso="t", token="tokW")
+    with patch("interactive.server.tmux_inject.capture", return_value=PROMPT), \
+         patch("interactive.server.tmux_inject.send_key", return_value=True) as send:
+        r = server.app.test_client().post(
+            "/approval/answer?key=%0A%20%201",  # "\n  1"
+            headers={"X-Approval-Token": "sekret"})
+    assert r.status_code == 200
+    send.assert_called_once_with("%3", "1")  # 空白は落として "1"
+
+
 def test_answer_gone_for_unknown_token(tmp_path, monkeypatch):
     server = _client(tmp_path, monkeypatch)
     r = server.app.test_client().post(

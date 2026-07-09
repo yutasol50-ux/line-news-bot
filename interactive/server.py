@@ -219,8 +219,8 @@ def approval_answer():
         abort(401)
     data = request.get_json(silent=True) or {}
     # key/token は JSON body だけでなくクエリ文字列でも受ける(Pushcut等 Body非対応向け)。
-    token = str(data.get("token", "") or request.args.get("token", ""))
-    key = str(data.get("key", "") or request.args.get("key", ""))
+    token = str(data.get("token", "") or request.args.get("token", "")).strip()
+    key = str(data.get("key", "") or request.args.get("key", "")).strip()
     if not key:
         abort(400)
     if not token:
