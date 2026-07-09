@@ -85,6 +85,34 @@ def test_answer_injects_when_pending(tmp_path, monkeypatch):
     assert approval_store.get("tokB") is None  # resolved
 
 
+def test_answer_without_token_uses_latest_pending(tmp_path, monkeypatch):
+    """token 省略時は「今出てる最新の承認」に答える(ショートカット簡易化)。"""
+    server = _client(tmp_path, monkeypatch)
+    from interactive import approval_store
+    approval_store.register("%1", "~/a", "old", [{"key": "1", "label": "Yes"}],
+                            now_iso="2026-07-09T09:00:00+09:00", token="old")
+    approval_store.register("%9", "~/b", "new", [{"key": "1", "label": "Yes"}],
+                            now_iso="2026-07-09T10:00:00+09:00", token="new")
+    with patch("interactive.server.tmux_inject.capture", return_value=PROMPT), \
+         patch("interactive.server.tmux_inject.send_key", return_value=True) as send:
+        r = server.app.test_client().post(
+            "/approval/answer", json={"key": "1"},  # token 無し
+            headers={"X-Approval-Token": "sekret"})
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "done"
+    send.assert_called_once_with("%9", "1")  # 最新(created新しい方)に注入
+    assert approval_store.get("new") is None
+
+
+def test_answer_without_token_gone_when_no_pending(tmp_path, monkeypatch):
+    server = _client(tmp_path, monkeypatch)
+    r = server.app.test_client().post(
+        "/approval/answer", json={"key": "1"},
+        headers={"X-Approval-Token": "sekret"})
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "gone"
+
+
 def test_answer_gone_for_unknown_token(tmp_path, monkeypatch):
     server = _client(tmp_path, monkeypatch)
     r = server.app.test_client().post(

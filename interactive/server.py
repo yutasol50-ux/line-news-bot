@@ -217,8 +217,15 @@ def approval_answer():
     data = request.get_json(silent=True) or {}
     token = str(data.get("token", ""))
     key = str(data.get("key", ""))
-    if not token or not key:
+    if not key:
         abort(400)
+    if not token:
+        # token 省略時は「今出てる最新の承認」に答える(ショートカット簡易化)。
+        entries = sorted(approval_store.pending_entries(),
+                         key=lambda e: e.get("created", ""), reverse=True)
+        if not entries:
+            return {"status": "gone", "message": "承認待ちはありませんでした。"}, 200
+        token = entries[0]["token"]
     status, msg = _resolve_and_inject(token, key)
     return {"status": status, "message": msg}, 200
 
