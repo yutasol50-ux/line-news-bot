@@ -5,10 +5,9 @@ from unittest.mock import patch, MagicMock
 
 
 def _fresh(monkeypatch, secret="sek", name="承認待ち"):
-    if secret is None:
-        monkeypatch.delenv("PUSHCUT_SECRET", raising=False)
-    else:
-        monkeypatch.setenv("PUSHCUT_SECRET", secret)
+    # secret=None は「未設定」を表すが、reload時の load_dotenv が .env の実キーで
+    # 上書きしないよう、空文字を明示セットする(load_dotenvは既存キーを上書きしない)。
+    monkeypatch.setenv("PUSHCUT_SECRET", "" if secret is None else secret)
     monkeypatch.setenv("PUSHCUT_NOTIFICATION", name)
     from shared import pushcut_client
     importlib.reload(pushcut_client)
