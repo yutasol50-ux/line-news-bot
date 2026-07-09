@@ -26,6 +26,7 @@ from interactive import approval_parse
 from interactive import approval_store
 from interactive import tmux_inject
 from shared import line_client
+from shared import pushcut_client
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -138,6 +139,8 @@ def approval_notify():
     items = [{"label": f'{c["key"]}. {c["label"]}', "data": f'approve:{token}:{c["key"]}'}
              for c in parsed["choices"]]
     line_client.push_quick_reply(header, items)
+    # Pushcut にも即通知(腕から承認ボタン)。未設定なら no-op。
+    pushcut_client.notify(title="🔐 承認待ち", text=parsed["question"])
     return {"token": token}, 200
 
 
