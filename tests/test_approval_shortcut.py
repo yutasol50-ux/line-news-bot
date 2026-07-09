@@ -113,6 +113,22 @@ def test_answer_without_token_gone_when_no_pending(tmp_path, monkeypatch):
     assert r.get_json()["status"] == "gone"
 
 
+def test_answer_key_from_query_string(tmp_path, monkeypatch):
+    """Pushcut等がBody無しでも使えるよう、keyをクエリ文字列でも受ける。"""
+    server = _client(tmp_path, monkeypatch)
+    from interactive import approval_store
+    approval_store.register("%3", "~/x", "Q", [{"key": "1", "label": "Yes"}],
+                            now_iso="t", token="tokQ")
+    with patch("interactive.server.tmux_inject.capture", return_value=PROMPT), \
+         patch("interactive.server.tmux_inject.send_key", return_value=True) as send:
+        r = server.app.test_client().post(
+            "/approval/answer?key=1",  # Body無し・クエリのみ
+            headers={"X-Approval-Token": "sekret"})
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "done"
+    send.assert_called_once_with("%3", "1")
+
+
 def test_answer_gone_for_unknown_token(tmp_path, monkeypatch):
     server = _client(tmp_path, monkeypatch)
     r = server.app.test_client().post(
