@@ -140,7 +140,8 @@ def approval_notify():
              for c in parsed["choices"]]
     line_client.push_quick_reply(header, items)
     # Pushcut にも即通知(腕から承認ボタン)。未設定なら no-op。
-    pushcut_client.notify(title="🔐 承認待ち", text=parsed["question"])
+    # 動的タイトル/本文は Pushcut PRO 機能なので送らない(名前で鳴らすだけ=無料枠)。
+    pushcut_client.notify()
     return {"token": token}, 200
 
 
