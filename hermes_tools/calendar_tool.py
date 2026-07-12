@@ -35,6 +35,11 @@ def calendar_read() -> str:
     return json.dumps(_run("calendar_read", {}), ensure_ascii=False)
 
 
+def reminder_add(text: str, at: str) -> str:
+    payload = {"text": text, "at": at}
+    return json.dumps(_run("reminder_add", payload), ensure_ascii=False)
+
+
 CALENDAR_ADD_SCHEMA = {
     "description": (
         "ユーザーのGoogleカレンダーに予定を登録する。予定名(title)は発話をそのまま写さず"
@@ -56,6 +61,24 @@ CALENDAR_ADD_SCHEMA = {
 CALENDAR_READ_SCHEMA = {
     "description": "ユーザーの直近のカレンダー予定を読み取り、一覧テキストを返す。「予定あったっけ」等の照会に使う。",
     "parameters": {"type": "object", "properties": {}},
+}
+
+REMINDER_ADD_SCHEMA = {
+    "description": (
+        "指定時刻ちょうどにスマホへ通知を鳴らすリマインダーを登録する。"
+        "「◯時に〜して/思い出させて/リマインドして/忘れないように」等、"
+        "予定(会う約束)ではなく『その時刻にやることを能動的に知らせてほしい』依頼に使う。"
+        "textはやること(発話をそのまま写さず簡潔に)。atは通知を鳴らす時刻 ISO8601"
+        "(例 2026-07-12T05:30:00+09:00)。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "やること(簡潔に)"},
+            "at": {"type": "string", "description": "通知時刻 ISO8601(+09:00)"},
+        },
+        "required": ["text", "at"],
+    },
 }
 
 # Hermesへの登録は hermes_tools/line_secretary_tools.py(発見器に拾わせるアダプタ)で行う。

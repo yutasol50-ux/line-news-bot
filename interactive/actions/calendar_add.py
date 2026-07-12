@@ -42,3 +42,41 @@ def add(title: str, start_iso: str, end_iso: str | None = None, all_day: bool = 
         }
     created = service.events().insert(calendarId=CALENDAR_ID, body=body).execute()
     return created.get("htmlLink", "")
+
+
+def delete_event(event_id: str) -> None:
+    """予定を削除する(リマインダー完了=イベント削除)。"""
+    service = _build_service()
+    service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+
+
+def reschedule(event_id: str, new_start_iso: str) -> None:
+    """予定の開始/終了を動かす(スヌーズ=指定時刻へ移動、5分枠)。"""
+    service = _build_service()
+    start = datetime.fromisoformat(new_start_iso)
+    end = (start + timedelta(minutes=5)).isoformat()
+    body = {
+        "start": {"dateTime": new_start_iso, "timeZone": "Asia/Tokyo"},
+        "end": {"dateTime": end, "timeZone": "Asia/Tokyo"},
+    }
+    service.events().patch(calendarId=CALENDAR_ID, eventId=event_id, body=body).execute()
+
+
+def add_reminder(text: str, at_iso: str) -> str:
+    """リマインダー予定(⏰マーク付き)を台帳として作る。
+
+    A案: カレンダー標準通知は付けない(overrides空)。通知は reminder_watch(cron)が
+    Pushcutで鳴らす=完了/スヌーズのボタン付き。二重通知を避けるため popup は明示的にOFF。
+    予定自体はスマホのカレンダーに見えるので「消えない台帳」の役割は保つ。
+    """
+    service = _build_service()
+    start = datetime.fromisoformat(at_iso)
+    end = (start + timedelta(minutes=5)).isoformat()
+    body = {
+        "summary": f"⏰{text}",
+        "start": {"dateTime": at_iso, "timeZone": "Asia/Tokyo"},
+        "end": {"dateTime": end, "timeZone": "Asia/Tokyo"},
+        "reminders": {"useDefault": False, "overrides": []},  # 標準通知OFF(Pushcut一本)
+    }
+    created = service.events().insert(calendarId=CALENDAR_ID, body=body).execute()
+    return created.get("htmlLink", "")

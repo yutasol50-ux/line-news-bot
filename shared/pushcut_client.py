@@ -14,13 +14,14 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 PUSHCUT_SECRET = os.environ.get("PUSHCUT_SECRET", "")
 PUSHCUT_NOTIFICATION = os.environ.get("PUSHCUT_NOTIFICATION", "承認待ち")
+PUSHCUT_REMINDER_NOTIFICATION = os.environ.get("PUSHCUT_REMINDER_NOTIFICATION", "reminder")
 
 
-def notify(title: str = "", text: str = "") -> bool:
-    """Pushcut の notification をトリガー。未設定なら False を返して何もしない。"""
+def _trigger(notification: str, title: str = "", text: str = "") -> bool:
+    """名前付き notification をトリガー。未設定(secret無)なら何もせず False。"""
     if not PUSHCUT_SECRET:
         return False
-    name = urllib.parse.quote(PUSHCUT_NOTIFICATION, safe="")
+    name = urllib.parse.quote(notification, safe="")
     url = f"https://api.pushcut.io/{PUSHCUT_SECRET}/notifications/{name}"
     body = {}
     if title:
@@ -35,3 +36,16 @@ def notify(title: str = "", text: str = "") -> bool:
     except Exception as e:
         print(f"[ERROR] Pushcut通知例外: {e}")
     return False
+
+
+def notify(title: str = "", text: str = "") -> bool:
+    """承認通知をトリガー(既存互換)。"""
+    return _trigger(PUSHCUT_NOTIFICATION, title=title, text=text)
+
+
+def notify_reminder(text: str, event_id: str = "") -> bool:
+    """リマインダー通知(secret URL)。完了/スヌーズのボタンは Pushcutアプリの
+    『reminder』通知に固定登録(→/reminder/done,/reminder/snooze の active操作)。
+    動的ボタンはApple Watchに表示されないため、固定ボタン方式を採る(B案)。
+    ここは名前で鳴らし text に内容を載せるだけ(event_id は将来用に受けるが未使用)。"""
+    return _trigger(PUSHCUT_REMINDER_NOTIFICATION, title="⏰ リマインダー", text=text)

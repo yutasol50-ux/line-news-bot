@@ -24,7 +24,9 @@ from interactive import diary_collector
 from interactive import diary_web
 from interactive import approval_parse
 from interactive import approval_store
+from interactive import reminder_store
 from interactive import tmux_inject
+from interactive.actions import calendar_add
 from shared import line_client
 from shared import pushcut_client
 from shared import bark_client
@@ -241,6 +243,62 @@ def approval_answer():
         token = entries[0]["token"]
     status, msg = _resolve_and_inject(token, key)
     return {"status": status, "message": msg}, 200
+
+
+def _reminder_auth(data) -> bool:
+    server_token = os.environ.get("REMINDER_TOKEN", "")
+    if not server_token:
+        abort(503)
+    sent = (request.headers.get("X-Reminder-Token", "")
+            or str(data.get("token", ""))
+            or request.args.get("token", ""))
+    return hmac.compare_digest(str(sent), server_token)
+
+
+def _reminder_target(data) -> str:
+    """操作対象の event_id。省略時は「今アクティブなリマインダー」(固定ボタン用)。"""
+    eid = str(data.get("event_id", "") or request.args.get("event_id", "")).strip()
+    return eid or (reminder_store.get_active() or "")
+
+
+@app.route("/reminder/done", methods=["GET", "POST"])
+def reminder_done():
+    """リマインダー完了=予定を削除。Pushcutボタン用(X-Reminder-Token / ?token=)。"""
+    data = request.get_json(silent=True) or {}
+    if not _reminder_auth(data):
+        abort(401)
+    eid = _reminder_target(data)
+    if not eid:
+        return {"status": "gone", "message": "対応するリマインダーがないよ。"}, 200
+    try:
+        calendar_add.delete_event(eid)
+    except Exception as e:
+        print(f"[ERROR] reminder_done delete: {e}")
+    reminder_store.clear(eid)
+    return {"status": "done", "message": "完了にしたよ👍"}, 200
+
+
+@app.route("/reminder/snooze", methods=["GET", "POST"])
+def reminder_snooze():
+    """スヌーズ=予定を minutes 分先へ移動し、既配達を外して再発火させる。既定10分。"""
+    data = request.get_json(silent=True) or {}
+    if not _reminder_auth(data):
+        abort(401)
+    eid = _reminder_target(data)
+    if not eid:
+        return {"status": "gone", "message": "対応するリマインダーがないよ。"}, 200
+    try:
+        minutes = int(data.get("minutes", 0) or request.args.get("minutes", 0) or 10)
+    except (ValueError, TypeError):
+        minutes = 10
+    new_start = (datetime.now(JST) + timedelta(minutes=minutes)).replace(
+        microsecond=0).isoformat()
+    try:
+        calendar_add.reschedule(eid, new_start)
+    except Exception as e:
+        print(f"[ERROR] reminder_snooze reschedule: {e}")
+    reminder_store.clear(eid)  # 既配達フラグを外す→新時刻の到来で見張りが再発火
+    return {"status": "snoozed", "message": f"{minutes}分後にまた鳴らすね⏰"}, 200
 
 
 @app.post("/webhook")

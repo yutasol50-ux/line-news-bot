@@ -3,7 +3,7 @@
 
 .env を読み込み、既存の action 関数へ振り分ける。認証情報は line-news-bot 側に留める。
 使い方: python -m interactive.actions.cli <cmd> '<json>'
-  cmd: calendar_add | memo_add | calendar_read
+  cmd: calendar_add | reminder_add | memo_add | calendar_read
 """
 import sys
 import json
@@ -21,6 +21,11 @@ def _calendar_add(**kwargs) -> str:
         title=kwargs["title"], start_iso=kwargs["start"],
         end_iso=kwargs.get("end"), all_day=kwargs.get("all_day", False),
     )
+
+
+def _reminder_add(**kwargs) -> str:
+    from interactive.actions import calendar_add
+    return calendar_add.add_reminder(text=kwargs["text"], at_iso=kwargs["at"])
 
 
 def _memo_add(**kwargs) -> str:
@@ -45,6 +50,8 @@ def main(argv: list) -> dict:
         payload = json.loads(argv[2])
     if cmd == "calendar_add":
         return {"ok": True, "link": _calendar_add(**payload)}
+    if cmd == "reminder_add":
+        return {"ok": True, "link": _reminder_add(**payload)}
     if cmd == "memo_add":
         return {"ok": True, "url": _memo_add(**payload)}
     if cmd == "calendar_read":

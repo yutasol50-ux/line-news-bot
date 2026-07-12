@@ -14,7 +14,8 @@ import sys
 sys.path.insert(0, os.path.expanduser("~/line/line-news-bot"))
 
 from hermes_tools.calendar_tool import (
-    calendar_add, calendar_read, CALENDAR_ADD_SCHEMA, CALENDAR_READ_SCHEMA,
+    calendar_add, calendar_read, reminder_add,
+    CALENDAR_ADD_SCHEMA, CALENDAR_READ_SCHEMA, REMINDER_ADD_SCHEMA,
 )
 from hermes_tools.memo_tool import memo_add, MEMO_ADD_SCHEMA
 from tools.registry import registry
@@ -35,6 +36,15 @@ registry.register(
     schema=CALENDAR_READ_SCHEMA,
     handler=lambda args, **kw: calendar_read(),
     emoji="📅",
+)
+registry.register(
+    name="reminder_add",
+    toolset="line_secretary",
+    schema=REMINDER_ADD_SCHEMA,
+    handler=lambda args, **kw: reminder_add(
+        args.get("text", ""), args.get("at", ""),
+    ),
+    emoji="⏰",
 )
 registry.register(
     name="memo_add",

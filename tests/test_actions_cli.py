@@ -10,6 +10,14 @@ def test_calendar_add_dispatch(monkeypatch):
     assert out["link"] == "https://cal/x"
 
 
+def test_reminder_add_dispatch(monkeypatch):
+    monkeypatch.setattr(cli, "_reminder_add", lambda **k: "https://cal/r")
+    out = cli.main(["cli", "reminder_add",
+                    '{"text":"洗濯物を回す","at":"2026-07-12T05:30:00+09:00"}'])
+    assert out["ok"] is True
+    assert out["link"] == "https://cal/r"
+
+
 def test_memo_add_dispatch(monkeypatch):
     monkeypatch.setattr(cli, "_memo_add", lambda **k: "https://notion/x")
     out = cli.main(["cli", "memo_add", '{"content":"牛乳を買う"}'])
