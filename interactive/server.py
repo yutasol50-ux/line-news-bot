@@ -24,6 +24,7 @@ from interactive import diary_collector
 from interactive import diary_web
 from interactive import approval_parse
 from interactive import approval_store
+from interactive import approval_reply
 from interactive import reminder_store
 from interactive import tmux_inject
 from interactive.actions import calendar_add
@@ -177,6 +178,26 @@ def _resolve_and_inject(token: str, key: str):
     if ok:
         return "done", f"✅ 送信しました（{key}. {label}）"
     return "failed", "⚠️ 送信に失敗しました。"
+
+
+def _try_answer_approval(text: str, reply_token: str) -> bool:
+    """承認待ちがあり text が Yes/No に解釈できれば、tmuxへ注入して True。
+    Apple WatchはLINEボタン(postback)を出せないので、テキスト「OK」等で承認する道。
+    承認待ちが無い/承認語でない時は False(=通常のHermes会話へ流す)。"""
+    entries = approval_store.pending_entries()
+    if not entries:
+        return False
+    entry = sorted(entries, key=lambda e: e.get("created", ""), reverse=True)[0]
+    key = approval_reply.key_for(text, entry.get("choices", []))
+    if not key:
+        return False
+
+    def _work():
+        _status, msg = _resolve_and_inject(entry["token"], key)
+        line_client.reply(reply_token, msg)
+
+    _spawn(_work)
+    return True
 
 
 def handle_postback(data: str, user_id: str) -> None:
@@ -343,6 +364,9 @@ def webhook():
             continue
         if mtype == "text" and msg["text"].strip() == "日記":
             _spawn(lambda rt=reply_token: diary_collector.start_manual(rt))
+            continue
+        # 承認待ちがあれば「OK」等のテキスト返信を承認として横取り(Watch対応)。
+        if mtype == "text" and _try_answer_approval(msg["text"], reply_token):
             continue
         # 即200を返してLINEのタイムアウト→再配信を防ぐ。実処理は別スレッドへ。
         if mtype == "text":
