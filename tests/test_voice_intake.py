@@ -1,8 +1,10 @@
-import os, interactive.voice_intake as vi
+import os, json, interactive.voice_intake as vi
 
 def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(vi, "PENDING_DIR", str(tmp_path / "pending"))
     monkeypatch.setattr(vi, "SEEN_PATH", str(tmp_path / "seen.json"))
+    monkeypatch.setattr(vi, "FAILED_DIR", str(tmp_path / "failed"))
+    monkeypatch.setattr(vi, "ATTEMPTS_PATH", str(tmp_path / "attempts.json"))
 
 def test_handle_saves_pending_and_replies(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
@@ -139,3 +141,109 @@ def test_handle_claim_is_atomic_second_call_is_duplicate(tmp_path, monkeypatch):
     assert r2 == "accepted"
     assert r3 == "duplicate"
     assert len(spawned) == 1  # 同一idの並行/連続handleでspawnは1回だけ
+
+
+# --- Finding 2/5: seen.json の原子的書き込み+上限件数 -----------------------
+
+def test_save_seen_is_atomic_partial_write_does_not_corrupt(tmp_path, monkeypatch):
+    """os.replace が失敗しても既存のseen.jsonは無傷(tmpファイルに書いてから差し替えるため)。"""
+    _setup(tmp_path, monkeypatch)
+    vi.mark_seen("orig")
+    good_content = open(vi.SEEN_PATH).read()
+
+    def boom_replace(src, dst):
+        raise OSError("crash mid-write")
+    monkeypatch.setattr(vi.os, "replace", boom_replace)
+
+    import pytest
+    with pytest.raises(OSError):
+        vi.mark_seen("new")
+
+    assert open(vi.SEEN_PATH).read() == good_content
+
+def test_seen_bounded_and_evicts_oldest_on_overflow(tmp_path, monkeypatch):
+    """直近 _MAX_SEEN(2000)件だけ保持し、超過分は最も古いものから捨てる。"""
+    _setup(tmp_path, monkeypatch)
+    preset = [f"id{i}" for i in range(vi._MAX_SEEN)]  # 2000件を直接仕込む(高速化)
+    vi._save_seen_ids(preset)
+    vi.mark_seen("idNEW")  # これで2001件目→上限超過
+
+    ids = json.load(open(vi.SEEN_PATH))
+    assert len(ids) == vi._MAX_SEEN
+    assert "id0" not in ids       # 最古が追い出された
+    assert "idNEW" in ids         # 最新は残る
+    assert vi.is_seen("idNEW") is True
+    assert vi.is_seen("id0") is False
+
+def test_corrupted_seen_json_loads_as_empty_and_does_not_crash(tmp_path, monkeypatch):
+    """壊れた/切り詰められたseen.jsonでもクラッシュせず空扱いになる(既存挙動の維持)。"""
+    _setup(tmp_path, monkeypatch)
+    os.makedirs(os.path.dirname(vi.SEEN_PATH), exist_ok=True)
+    with open(vi.SEEN_PATH, "w") as f:
+        f.write("{not valid json...")
+    assert vi.is_seen("anything") is False
+    assert vi.claim("100") is True  # 壊れたファイルからでも新規claimできる
+
+
+# --- Finding 4: 試行回数の上限+failed/への隔離 -------------------------------
+
+def test_process_quarantines_after_max_attempts(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    os.makedirs(vi.PENDING_DIR, exist_ok=True)
+    fp = os.path.join(vi.PENDING_DIR, "100.m4a"); open(fp, "wb").write(b"x")
+    pushed = []
+    def boom(p): raise RuntimeError("gemini busy")
+
+    for _ in range(vi.MAX_ATTEMPTS - 1):
+        r = vi.process("100", transcribe=boom,
+                        draft=lambda t: ("タイトル", "本文"),
+                        write=lambda **kw: "/x.md",
+                        push=lambda t: pushed.append(t), today="2026-07-14")
+        assert r == "retry_later"
+        assert os.path.exists(fp)  # 上限未満はpendingに残る
+
+    r = vi.process("100", transcribe=boom,
+                    draft=lambda t: ("タイトル", "本文"),
+                    write=lambda **kw: "/x.md",
+                    push=lambda t: pushed.append(t), today="2026-07-14")
+    assert r == "failed"
+    assert not os.path.exists(fp)                                   # pendingから消えた
+    assert os.path.exists(os.path.join(vi.FAILED_DIR, "100.m4a"))    # failed/へ隔離された
+    assert pushed.count(vi._BUSY) == vi.MAX_ATTEMPTS - 1
+    assert pushed.count(vi._FAILED) == 1                             # 最終通知は1回だけ
+
+def test_process_below_attempt_cap_stays_pending_and_pushes_busy(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    os.makedirs(vi.PENDING_DIR, exist_ok=True)
+    fp = os.path.join(vi.PENDING_DIR, "200.m4a"); open(fp, "wb").write(b"x")
+    pushed = []
+    def boom(p): raise RuntimeError("gemini busy")
+
+    for _ in range(vi.MAX_ATTEMPTS - 1):
+        r = vi.process("200", transcribe=boom,
+                        draft=lambda t: ("タイトル", "本文"),
+                        write=lambda **kw: "/x.md",
+                        push=lambda t: pushed.append(t), today="2026-07-14")
+        assert r == "retry_later"
+
+    assert os.path.exists(fp)  # まだfailed/へは移されていない
+    assert not os.path.isdir(vi.FAILED_DIR) or not os.listdir(vi.FAILED_DIR)
+    assert pushed == [vi._BUSY] * (vi.MAX_ATTEMPTS - 1)
+
+def test_process_success_after_prior_failures_clears_attempt_count(tmp_path, monkeypatch):
+    """失敗を重ねた後に成功したら、試行カウントは片付く(次回また0から数える)。"""
+    _setup(tmp_path, monkeypatch)
+    os.makedirs(vi.PENDING_DIR, exist_ok=True)
+    fp = os.path.join(vi.PENDING_DIR, "300.m4a"); open(fp, "wb").write(b"x")
+    pushed = []
+    vi.process("300", transcribe=lambda p: (_ for _ in ()).throw(RuntimeError("boom")),
+               draft=lambda t: ("t", "b"), write=lambda **kw: "/x.md",
+               push=lambda t: pushed.append(t), today="2026-07-14")
+    assert vi._load_attempts().get("300") == 1
+
+    r = vi.process("300", transcribe=lambda p: "全文",
+                    draft=lambda t: ("タイトル", "## 要点\n- x\n"),
+                    write=lambda **kw: "/vault/_inbox/x.md",
+                    push=lambda t: pushed.append(t), today="2026-07-14")
+    assert r == "handled"
+    assert "300" not in vi._load_attempts()

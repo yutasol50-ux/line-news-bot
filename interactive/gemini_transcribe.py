@@ -43,6 +43,12 @@ def _api_key():
     return os.environ.get("GEMINI_API_KEY")
 
 
+def _safe_request_error(e):
+    """requestsの接続系例外をURL/APIキーを含まないRuntimeErrorに変換する。
+    生の例外文字列は `?key={KEY}` を含むURLごとjournalctlに流れてしまうため。"""
+    return RuntimeError(f"Gemini request failed: {type(e).__name__}")
+
+
 def guess_mime(path):
     m, _ = mimetypes.guess_type(path)
     if m:
@@ -59,37 +65,46 @@ def _upload_file(path, mime, *, post=requests.post, get=requests.get, sleep=time
     """File API へのresumableアップロード。ACTIVEになるまで待ってfile_uriを返す。"""
     key = _api_key()
     size = os.path.getsize(path)
-    start = post(
-        f"{API}/upload/v1beta/files?key={key}",
-        headers={
-            "X-Goog-Upload-Protocol": "resumable",
-            "X-Goog-Upload-Command": "start",
-            "X-Goog-Upload-Header-Content-Length": str(size),
-            "X-Goog-Upload-Header-Content-Type": mime,
-            "Content-Type": "application/json",
-        },
-        data=json.dumps({"file": {"display_name": os.path.basename(path)}}),
-    )
+    try:
+        start = post(
+            f"{API}/upload/v1beta/files?key={key}",
+            headers={
+                "X-Goog-Upload-Protocol": "resumable",
+                "X-Goog-Upload-Command": "start",
+                "X-Goog-Upload-Header-Content-Length": str(size),
+                "X-Goog-Upload-Header-Content-Type": mime,
+                "Content-Type": "application/json",
+            },
+            data=json.dumps({"file": {"display_name": os.path.basename(path)}}),
+        )
+    except requests.exceptions.RequestException as e:
+        raise _safe_request_error(e) from None
     start.raise_for_status()
     upload_url = start.headers.get("X-Goog-Upload-URL")
     if not upload_url:
         raise RuntimeError(f"アップロードURL取得失敗: {start.text}")
-    with open(path, "rb") as f:
-        up = post(
-            upload_url,
-            headers={
-                "X-Goog-Upload-Offset": "0",
-                "X-Goog-Upload-Command": "upload, finalize",
-                "Content-Length": str(size),
-            },
-            data=f.read(),
-        )
+    try:
+        with open(path, "rb") as f:
+            up = post(
+                upload_url,
+                headers={
+                    "X-Goog-Upload-Offset": "0",
+                    "X-Goog-Upload-Command": "upload, finalize",
+                    "Content-Length": str(size),
+                },
+                data=f.read(),
+            )
+    except requests.exceptions.RequestException as e:
+        raise _safe_request_error(e) from None
     up.raise_for_status()
     info = up.json()["file"]
     name, uri = info["name"], info["uri"]
     while info.get("state") == "PROCESSING":
         sleep(2)
-        info = get(f"{API}/v1beta/{name}?key={key}").json()
+        try:
+            info = get(f"{API}/v1beta/{name}?key={key}").json()
+        except requests.exceptions.RequestException as e:
+            raise _safe_request_error(e) from None
     if info.get("state") != "ACTIVE":
         raise RuntimeError(f"ファイル処理失敗: {info.get('state')}")
     return uri, mime
@@ -112,12 +127,20 @@ def _generate_with_retry(body, *, post=requests.post, sleep=time.sleep, first_mo
     last_error = None
     for model in models:
         for attempt in range(5):
-            r = post(
-                f"{API}/v1beta/models/{model}:generateContent?key={key}",
-                headers={"Content-Type": "application/json"},
-                data=json.dumps(body),
-                timeout=600,
-            )
+            try:
+                r = post(
+                    f"{API}/v1beta/models/{model}:generateContent?key={key}",
+                    headers={"Content-Type": "application/json"},
+                    data=json.dumps(body),
+                    timeout=600,
+                )
+            except requests.exceptions.RequestException as e:
+                # 接続エラー(DNS/timeout/refused等)は一過性の可能性があるため、
+                # 429/500/503と同様にバックオフしてリトライする。
+                # 例外文字列にはURL(?key=...)が含まれうるのでログに残さない。
+                last_error = f"{model} connection_error({type(e).__name__})"
+                sleep(5 * (2 ** attempt))
+                continue
             if r.status_code == 200:
                 data = r.json()
                 break

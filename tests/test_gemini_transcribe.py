@@ -1,3 +1,4 @@
+import requests
 import interactive.gemini_transcribe as gt
 
 
@@ -24,6 +25,48 @@ def test_transcribe_retries_then_succeeds(monkeypatch, tmp_path):
     text = gt.transcribe(str(f), post=fake_post, sleep=lambda s: None)
     assert text == "こんにちは"
     assert calls["n"] == 2  # 1回503→リトライで成功
+
+
+def test_transcribe_connection_error_does_not_leak_api_key(monkeypatch, tmp_path):
+    """DNS/timeout/refused等の接続エラーはURL(?key=...)ごと例外文字列に載る。
+    voice_intake.process の `except ... print(...)` からjournalctlに漏れないよう、
+    URL/キーを含まない安全なRuntimeErrorへ包み直す(Finding 1)。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRET")
+    f = tmp_path / "a.m4a"; f.write_bytes(b"x" * 10)
+
+    def fake_post(url, **kw):
+        # requestsの実際の挙動を模す: 接続エラーメッセージにURL全体が含まれる。
+        raise requests.exceptions.ConnectionError(
+            f"Connection refused for url: {url}"
+        )
+
+    import pytest
+    with pytest.raises(RuntimeError) as exc:
+        gt.transcribe(str(f), post=fake_post, sleep=lambda s: None)
+    msg = str(exc.value)
+    assert "SECRET" not in msg
+    assert "key=" not in msg
+
+
+def test_transcribe_retries_after_connection_error_then_succeeds(monkeypatch, tmp_path):
+    """接続エラーは即失敗ではなく、既存の指数バックオフでリトライされる(一過性の想定)。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    f = tmp_path / "a.m4a"; f.write_bytes(b"x" * 10)
+    calls = {"n": 0}
+    sleeps = []
+
+    def fake_post(url, **kw):
+        if "generateContent" in url:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise requests.exceptions.ConnectionError(f"boom {url}")
+            return _Resp(200, {"candidates": [{"content": {"parts": [{"text": "こんにちは"}]}}]})
+        return _Resp(200, {})
+
+    text = gt.transcribe(str(f), post=fake_post, sleep=sleeps.append)
+    assert text == "こんにちは"
+    assert calls["n"] == 2  # 1回目は接続エラー→リトライで成功
+    assert len(sleeps) == 1
 
 
 def test_transcribe_missing_api_key_raises(monkeypatch, tmp_path):
