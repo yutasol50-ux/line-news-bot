@@ -15,6 +15,7 @@ PROMPT = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  
 
 
 def test_notify_registers_and_pushes(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPROVAL_NOTIFY_LINE", "1")  # LINE点灯時の挙動を検証(.env非依存)
     server = _client(tmp_path, monkeypatch)
     with patch("interactive.server.line_client.push_quick_reply", return_value=True) as push:
         r = server.app.test_client().post(
@@ -79,3 +80,19 @@ def test_notify_ignores_non_prompt(tmp_path, monkeypatch):
             headers={"X-Approval-Token": "sekret"})
     assert r.status_code == 204
     assert not push.called
+
+
+def test_notify_line_disabled_but_telegram_on(tmp_path, monkeypatch):
+    """APPROVAL_NOTIFY_LINE=0 のとき LINE は呼ばず Telegram は呼ぶ。"""
+    monkeypatch.setenv("APPROVAL_NOTIFY_LINE", "0")
+    server = _client(tmp_path, monkeypatch)
+    with patch("interactive.server.line_client.push_quick_reply") as line, \
+         patch("interactive.server.telegram_client.notify", return_value=True) as tg:
+        r = server.app.test_client().post(
+            "/approval/notify",
+            json={"pane": "%3", "cwd": "~/x", "capture": PROMPT},
+            headers={"X-Approval-Token": "sekret"},
+        )
+    assert r.status_code == 200
+    assert not line.called   # LINEは止まってる
+    assert tg.called         # Telegramには飛ぶ

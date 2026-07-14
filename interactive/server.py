@@ -170,8 +170,9 @@ def approval_notify():
     # ※現状は「通知」まで。OK返信での承認注入は別途ポーラーで対応予定。
     _tg_choices = " / ".join(f'{c["key"]}={c["label"]}' for c in parsed["choices"])
     telegram_client.notify(f"{header}\n\n選択肢: {_tg_choices}")
-    # LINE: 遅めだが記録が残る＆クイックリプライ。最後に。
-    line_client.push_quick_reply(header, items)
+    # LINE: 遅めだが記録が残る＆クイックリプライ。APPROVAL_NOTIFY_LINE=0 で無効化(Telegram集約時)。
+    if os.environ.get("APPROVAL_NOTIFY_LINE", "1") != "0":
+        line_client.push_quick_reply(header, items)
     return {"token": token}, 200
 
 
