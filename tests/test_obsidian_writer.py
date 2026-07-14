@@ -18,8 +18,10 @@ def test_write_draft_creates_md_with_frontmatter(tmp_path):
     assert "## 全文（Gemini文字起こし）" in text
     assert "生の文字起こし全文" in text
 
-def test_write_draft_returns_absolute_path(tmp_path):
+def test_write_draft_returns_absolute_path(tmp_path, monkeypatch):
     """write_draft must return an absolute path even with relative inbox."""
+    # 相対inboxを検証しつつ、書き込み先はtmp_path配下に閉じ込める(リポジトリを汚さない)
+    monkeypatch.chdir(tmp_path)
     relative_inbox = "relative_dir"
     p = ow.write_draft(
         title="テスト",
