@@ -1,8 +1,11 @@
 import base64
 import hashlib
 import hmac
+import importlib
 import json
+import threading
 import interactive.server as server
+import interactive.voice_drain as voice_drain_mod
 
 SECRET = "testsecret"
 
@@ -155,14 +158,44 @@ def test_diary_mode_audio_routes_to_voice_intake_not_photo(monkeypatch):
     assert calls == [("voice", "A2", "RT")]
 
 
-def test_import_does_not_trigger_voice_drain(monkeypatch):
-    """モジュールのimport(=pytest収集時)だけではdrainが走らないこと。
-    server は本テストの時点で既にimport済みなので、ここでspyを差し込んでも
-    それ以降に副作用として呼ばれていないことを確認できる(=モジュールスコープでの
-    threading.Thread(...).start() が無い証拠)。"""
+def test_reimport_does_not_trigger_voice_drain(monkeypatch):
+    """モジュール再読み込み(=import相当)ではdrainが発火しないことを保証する。
+
+    起動時drainは `if __name__ == "__main__":` 内でのみスレッド起動する設計。
+    旧テスト(test_import_does_not_trigger_voice_drain)は server がpytest収集時に
+    既にimport済みの状態でspyを仕込んでいたため、モジュールスコープに
+    `threading.Thread(target=_startup_drain, daemon=True).start()` が
+    紛れ込む regression が起きても検知できなかった(=空振り)。
+    ここでは import 前(reload前)にspyを仕込み、importlib.reload で
+    モジュール本体を再実行させることで、実際にimport時の副作用を検証する。
+    """
     calls = []
-    monkeypatch.setattr(server.voice_drain, "drain", lambda: calls.append(1) or 0)
-    assert calls == []
+    # reload時に server.voice_drain が再バインドされる先の実体(interactive.voice_drain)
+    # を先にpatchしておく。server.voice_drain を直接patchしてもreloadで上書きされる。
+    monkeypatch.setattr(voice_drain_mod, "drain", lambda: calls.append(1) or 0)
+
+    started = []
+
+    class _ThreadSpy:
+        """threading.Threadの代わり。生成された事実だけ記録し、実行はしない
+        (regressionが再現しても実際にdrainへは触れさせず決定的に検知する)。"""
+
+        def __init__(self, *args, **kwargs):
+            target = kwargs.get("target") or (args[0] if args else None)
+            started.append(target)
+
+        def start(self):
+            pass
+
+        def join(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(threading, "Thread", _ThreadSpy)
+
+    importlib.reload(server)
+
+    assert calls == []      # reload(=import相当)でdrainは呼ばれない
+    assert started == []    # reload時にThreadは一切生成されない(起動時drainはmain guard内)
 
 
 def test_startup_drain_swallows_exceptions(monkeypatch):
