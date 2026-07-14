@@ -22,3 +22,12 @@ def test_drain_ignores_failed_dir(tmp_path, monkeypatch):
     n = vd.drain(process=lambda mid: done.append(mid))
     assert n == 1
     assert done == ["1"]
+
+def test_drain_ignores_dotfiles(tmp_path, monkeypatch):
+    """.gitkeep等のドットファイルは音声ではないので再処理対象にしない。"""
+    monkeypatch.setattr(vi, "PENDING_DIR", str(tmp_path))
+    open(os.path.join(str(tmp_path), ".gitkeep"), "wb").write(b"")
+    open(os.path.join(str(tmp_path), "1.m4a"), "wb").write(b"x")
+    done = []
+    n = vd.drain(process=lambda mid: done.append(mid))
+    assert n == 1 and done == ["1"]  # .gitkeep は無視、空mid("")も生成されない

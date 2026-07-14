@@ -5,7 +5,9 @@ from interactive import voice_intake
 def drain(*, process=voice_intake.process):
     d = voice_intake.PENDING_DIR
     if not os.path.isdir(d): return 0
-    mids = sorted({name.rsplit(".",1)[0] for name in os.listdir(d)})
+    # ドットファイル(.gitkeep等)は音声ではないので除外
+    mids = sorted({name.rsplit(".",1)[0] for name in os.listdir(d)
+                   if not name.startswith(".")})
     for mid in mids:
         try:
             process(mid)

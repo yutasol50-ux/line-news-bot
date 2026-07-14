@@ -164,6 +164,8 @@ def handle(message_id, reply_token, *, fetch=line_media.fetch_content,
 def _find_pending(message_id):
     if not os.path.isdir(PENDING_DIR): return None
     for name in os.listdir(PENDING_DIR):
+        if name.startswith("."):  # .gitkeep等のドットファイルは無視
+            continue
         if name.rsplit(".",1)[0] == str(message_id):
             return os.path.join(PENDING_DIR, name)
     return None
