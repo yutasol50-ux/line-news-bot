@@ -2,6 +2,7 @@
 venv/
 __pycache__/
 data/
+data/voice/
 logs/
 secrets/*
 !secrets/.gitkeep

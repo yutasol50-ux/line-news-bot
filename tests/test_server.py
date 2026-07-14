@@ -153,3 +153,29 @@ def test_diary_mode_audio_routes_to_voice_intake_not_photo(monkeypatch):
         headers={"X-Line-Signature": "x", "Content-Type": "application/json"})
     assert r.status_code == 200
     assert calls == [("voice", "A2", "RT")]
+
+
+def test_import_does_not_trigger_voice_drain(monkeypatch):
+    """モジュールのimport(=pytest収集時)だけではdrainが走らないこと。
+    server は本テストの時点で既にimport済みなので、ここでspyを差し込んでも
+    それ以降に副作用として呼ばれていないことを確認できる(=モジュールスコープでの
+    threading.Thread(...).start() が無い証拠)。"""
+    calls = []
+    monkeypatch.setattr(server.voice_drain, "drain", lambda: calls.append(1) or 0)
+    assert calls == []
+
+
+def test_startup_drain_swallows_exceptions(monkeypatch):
+    """_startup_drain は drain() が例外を投げても外へ伝播させない(起動をブロックしない)。"""
+    def boom():
+        raise RuntimeError("gemini busy")
+    monkeypatch.setattr(server.voice_drain, "drain", boom)
+    server._startup_drain()  # 例外が上がらなければOK
+
+
+def test_startup_drain_calls_voice_drain(monkeypatch):
+    """_startup_drain は voice_drain.drain() を呼び出す(戻り値がNoneでも例外なく完了)。"""
+    calls = []
+    monkeypatch.setattr(server.voice_drain, "drain", lambda: calls.append(1) or 2)
+    server._startup_drain()
+    assert calls == [1]
