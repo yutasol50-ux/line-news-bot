@@ -277,3 +277,43 @@ def test_draft_note_retries_on_503(monkeypatch):
     assert title == "タイトル"
     assert body == "本文"
     assert calls["n"] == 2
+
+
+def test_draft_note_extracts_title_from_marker(monkeypatch):
+    """`TITLE: ...` マーカーがあれば、そこからタイトルを取り出し、
+    本文には `TITLE:` 行を含めない(Finding: 実機で前置き行がタイトルを汚染した対策)。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    def fake_post(url, **kw):
+        return _Resp(200, {"candidates": [{"content": {"parts": [
+            {"text": "TITLE: JPYCとステーブルコインの未来\n\n## 要点\n- a\n"}
+        ]}}]})
+    title, body = gt.draft_note("文字起こし全文", post=fake_post, sleep=lambda s: None)
+    assert title == "JPYCとステーブルコインの未来"
+    assert body.startswith("## 要点")
+    assert "TITLE:" not in body
+
+
+def test_draft_note_drops_preamble_when_no_marker(monkeypatch):
+    """マーカー無しで前置き(「以下は音声の文字起こしです。」)が1行目に来ても、
+    それをタイトルとして採用しない(実機で観測した実際のバグ)。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    def fake_post(url, **kw):
+        return _Resp(200, {"candidates": [{"content": {"parts": [
+            {"text": "以下は音声の文字起こしです。\n\n本当の内容タイトル\n\n## 要点\n- a\n"}
+        ]}}]})
+    title, body = gt.draft_note("文字起こし全文", post=fake_post, sleep=lambda s: None)
+    assert title != "以下は音声の文字起こしです。"
+    assert title == "本当の内容タイトル"
+
+
+def test_draft_note_truncates_overlong_title(monkeypatch):
+    """タイトルが異常に長い(60字超)場合、ファイル名スラッグ(40字上限)に
+    収まるよう先頭40字に切り詰める。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    long_title = "あ" * 100
+    def fake_post(url, **kw):
+        return _Resp(200, {"candidates": [{"content": {"parts": [
+            {"text": f"TITLE: {long_title}\n\n## 要点\n- a\n"}
+        ]}}]})
+    title, body = gt.draft_note("文字起こし全文", post=fake_post, sleep=lambda s: None)
+    assert len(title) <= 40

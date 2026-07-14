@@ -33,8 +33,14 @@ TRANSCRIBE_PROMPT = (
 )
 
 DRAFT_PROMPT = (
-    "以下は音声の文字起こしです。この内容からObsidianノートの下書きを作ってください。"
-    "1行目にタイトルだけを書き、2行目以降に要点(3〜5個の箇条書き)と見出し付きの本文を続けてください。"
+    "与えられた音声の文字起こしから、Obsidianノートの下書きを作ってください。\n"
+    "出力は必ず次の形式に厳密に従ってください:\n"
+    "1行目: `TITLE: ` に続けて、内容を表す10〜30字程度の日本語タイトルだけを書く"
+    "(「文字起こし」「音声」などの語は使わない)。\n"
+    "2行目: 空行。\n"
+    "3行目以降: 要点(3〜5個の箇条書き)と見出し付きの本文。\n"
+    "前置き・挨拶・「以下は〜です。」のような説明文は一切付けないこと。"
+    "1行目は必ず `TITLE: ` から始めること。"
     "要約しすぎず、話された内容の詳細をできるだけ保持してください。\n\n---\n\n"
 )
 
@@ -216,6 +222,62 @@ def transcribe_long(path, *, split=_ffmpeg_split, transcribe=transcribe, chunk_s
         return "\n".join(transcribe(c) for c in chunks)
 
 
+TITLE_MARKER = "TITLE:"
+_TITLE_MAX_LEN = 60
+_TITLE_TRUNCATE_LEN = 40
+
+
+def _looks_like_preamble(line):
+    """モデルが「以下は音声の文字起こしです。」のような前置きを
+    (TITLE:マーカーなしで)1行目に出してきた場合の検出。"""
+    s = line.strip()
+    if not s:
+        return False
+    if "文字起こし" in s:
+        return True
+    if (s.startswith("以下は") or s.startswith("これは")) and s.endswith("です。"):
+        return True
+    return False
+
+
+def _parse_title_and_body(text):
+    """モデル出力からタイトルと本文を頑健に取り出す。
+
+    - `TITLE: ...` マーカーがあればそこからタイトルを取り、続く空行を飛ばして本文とする。
+    - マーカーが無ければ、前置き文(「以下は音声の文字起こしです。」等)を1行目から検出して
+      読み飛ばし、その次の非空行をタイトルとする(旧来のフォールバック挙動)。
+    - タイトルが空、または60字を超えて異常に長い場合は、ファイル名スラッグ(40字上限)に
+      収まるよう先頭40字に切り詰める。
+    """
+    lines = text.lstrip("\n").split("\n")
+
+    if lines and lines[0].strip().startswith(TITLE_MARKER):
+        title = lines[0].strip()[len(TITLE_MARKER):].strip()
+        rest = lines[1:]
+    else:
+        idx = 0
+        if lines and _looks_like_preamble(lines[0]):
+            idx = 1
+            while idx < len(lines) and lines[idx].strip() == "":
+                idx += 1
+        title = lines[idx].strip() if idx < len(lines) else ""
+        rest = lines[idx + 1:] if idx < len(lines) else []
+
+    while rest and rest[0].strip() == "":
+        rest.pop(0)
+    note_body = "\n".join(rest)
+
+    if not title:
+        for l in note_body.split("\n"):
+            if l.strip():
+                title = l.strip()[:_TITLE_TRUNCATE_LEN]
+                break
+    elif len(title) > _TITLE_MAX_LEN:
+        title = title[:_TITLE_TRUNCATE_LEN]
+
+    return title, note_body
+
+
 def draft_note(transcript, *, post=requests.post, sleep=time.sleep):
     """文字起こしからObsidianノートの下書き(title, body)を生成する。"""
     if not _api_key():
@@ -225,7 +287,4 @@ def draft_note(transcript, *, post=requests.post, sleep=time.sleep):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 65536},
     }
     text = _generate_with_retry(body, post=post, sleep=sleep)
-    lines = text.split("\n", 1)
-    title = lines[0].strip()
-    note_body = lines[1].lstrip("\n") if len(lines) > 1 else ""
-    return title, note_body
+    return _parse_title_and_body(text)

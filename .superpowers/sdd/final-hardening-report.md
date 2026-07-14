@@ -218,3 +218,48 @@ $ venv/bin/python -m pytest tests/ -q
 ```
 
 新規/既存テストとも全PASS。回帰なし。`briefing/daily_word.py`は今回も作業対象外のため未ステージ。
+
+---
+
+## E2E追補 — `draft_note` タイトルへの前置き混入(実機バグ)
+
+実際のGemini APIに対する生E2Eテストで発覚。`draft_note(transcript)` は出力1行目をそのまま
+タイトルとして採用していたが、実機の応答が「以下は音声の文字起こしです。」という会話的な前置き行を
+1行目に出してきたため、タイトルが文字通り `"以下は音声の文字起こしです。"` になってしまい、
+Obsidianノートの見出し(H1)とファイル名スラッグの両方がこのゴミ文字列で汚染される不具合。
+
+**変更箇所**: `interactive/gemini_transcribe.py`
+- `DRAFT_PROMPT`: 出力形式を厳密化。1行目を `TITLE: <タイトル>` から必ず始めさせ、2行目を空行、
+  3行目以降を本文とする構造を明示指示。前置き・挨拶・「以下は〜です。」のような説明文を一切付けない
+  こと、タイトルに「文字起こし」「音声」などの語を使わないことを明示的に禁止。
+- `_parse_title_and_body(text)`(新設): モデル出力からタイトル/本文を頑健に取り出す。
+  1. `TITLE:` マーカーが1行目にあれば、そこからタイトルを抽出し、続く空行を飛ばして残りを本文とする。
+  2. マーカーが無い場合は旧来通り1行目をタイトルとするが、`_looks_like_preamble()` で
+     「文字起こし」を含む行、または「以下は」/「これは」で始まり「です。」で終わる行を前置きとして検出し、
+     読み飛ばして次の非空行をタイトルに採用する(モデルがマーカー指示を無視してもタイトルが汚染されない)。
+  3. ガード: タイトルが空、または60字を超えて異常に長い場合は、`obsidian_writer._slug()` の40字上限に
+     収まるよう先頭40字に切り詰める(空の場合は本文側の最初の非空行から補う)。
+- `draft_note()`: パース処理を `_parse_title_and_body()` に委譲。既存のリトライ/バックオフ・
+  `maxOutputTokens` の挙動は変更なし。
+
+**ロックしたテスト**: `tests/test_gemini_transcribe.py`
+- `test_draft_note_extracts_title_from_marker` — `TITLE: JPYCとステーブルコインの未来\n\n## 要点\n- a\n`
+  という出力から `title == "JPYCとステーブルコインの未来"` を取り出し、本文に `TITLE:` 行が残らないことを確認。
+- `test_draft_note_drops_preamble_when_no_marker` — マーカー無しで「以下は音声の文字起こしです。」が
+  1行目に来る実機再現ケースで、タイトルがその前置き文字列に**ならない**ことを確認(実際に観測したバグの再現テスト)。
+- `test_draft_note_truncates_overlong_title` — `TITLE:` の値が100字ある場合、タイトルが40字以下に
+  切り詰められることを確認(ファイル名スラッグの40字上限との整合)。
+- 既存2件(`test_draft_note_splits_title_and_body` / `test_draft_note_retries_on_503`)は変更なしでPASSを維持。
+
+**pytest出力**:
+```
+$ venv/bin/python -m pytest tests/test_gemini_transcribe.py -v
+...
+18 passed in 1.21s
+
+$ venv/bin/python -m pytest tests/ -q
+...
+255 passed in 5.03s
+```
+
+新規/既存テストとも全PASS。回帰なし。`briefing/daily_word.py`は今回も作業対象外のため未ステージ。
