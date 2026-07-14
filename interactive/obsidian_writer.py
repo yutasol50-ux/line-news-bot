@@ -23,4 +23,4 @@ def write_draft(title, body, transcript, message_id, *, inbox, today):
     content = f"{fm}# {title}\n\n{body}\n\n## 全文（Gemini文字起こし）\n\n{transcript}\n"
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    return path
+    return os.path.abspath(path)
