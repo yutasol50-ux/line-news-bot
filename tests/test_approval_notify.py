@@ -85,6 +85,8 @@ def test_notify_ignores_non_prompt(tmp_path, monkeypatch):
 def test_notify_line_disabled_but_telegram_on(tmp_path, monkeypatch):
     """APPROVAL_NOTIFY_LINE=0 のとき LINE は呼ばず Telegram は呼ぶ。"""
     monkeypatch.setenv("APPROVAL_NOTIFY_LINE", "0")
+    monkeypatch.setenv("APPROVAL_NOTIFY_TELEGRAM", "1")  # .env非依存に(緊急停止フラグの影響を排除)
+    monkeypatch.setenv("APPROVAL_TG_COOLDOWN_SEC", "0")  # クールダウン無効で確実に送る
     server = _client(tmp_path, monkeypatch)
     with patch("interactive.server.line_client.push_quick_reply") as line, \
          patch("interactive.server.telegram_client.notify", return_value=True) as tg:

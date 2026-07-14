@@ -82,6 +82,25 @@ def _spawn(fn) -> None:
     threading.Thread(target=fn, daemon=True).start()
 
 
+# --- Telegram承認通知の流量制御(クールダウン) --------------------------------
+# 自動作業中は許可プロンプトが大量に出るため、1プロンプト=1通知だと洪水になる。
+# 「最後の送信からcooldown秒以内は送らない」で最大 1通知/cooldown に抑える。
+import time as _time  # noqa: E402
+_last_tg_approval = 0.0
+_tg_cooldown_lock = threading.Lock()
+
+
+def _tg_cooldown_ok(cooldown_sec: float, now: float = None) -> bool:
+    """送ってよければ True(かつ last を更新)、クールダウン中なら False。"""
+    now = now if now is not None else _time.monotonic()
+    global _last_tg_approval
+    with _tg_cooldown_lock:
+        if now - _last_tg_approval < cooldown_sec:
+            return False
+        _last_tg_approval = now
+        return True
+
+
 def _process(text: str, reply_token: str, now_iso: str) -> None:
     if os.environ.get("HERMES_BRAIN", "").lower() in ("on", "1", "true"):
         # まず数十秒待ち、超えたら裏に回して Gmail+LINE要点で届ける(自己昇格)。
@@ -167,9 +186,14 @@ def approval_notify():
     # Pushcut: 腕から承認ボタン。動的タイトル/本文はPRO機能なので送らない(名前で鳴らすだけ)。
     pushcut_client.notify()
     # Telegram(Claude Code専用bot): 無料無制限＆Watchで読める。選択肢も本文に含める。
-    # ※現状は「通知」まで。OK返信での承認注入は別途ポーラーで対応予定。
-    _tg_choices = " / ".join(f'{c["key"]}={c["label"]}' for c in parsed["choices"])
-    telegram_client.notify(f"{header}\n\n選択肢: {_tg_choices}")
+    # APPROVAL_NOTIFY_TELEGRAM=0 で無効化。クールダウンで洪水(1プロンプト=1通知)を防ぐ。
+    if os.environ.get("APPROVAL_NOTIFY_TELEGRAM", "1") != "0":
+        _cooldown = float(os.environ.get("APPROVAL_TG_COOLDOWN_SEC", "300"))
+        if _tg_cooldown_ok(_cooldown):
+            _tg_choices = " / ".join(f'{c["key"]}={c["label"]}' for c in parsed["choices"])
+            telegram_client.notify(
+                f"{header}\n\n選択肢: {_tg_choices}\n"
+                f"(次の通知まで最大{int(_cooldown/60)}分。承認は席かPushcutでも可)")
     # LINE: 遅めだが記録が残る＆クイックリプライ。APPROVAL_NOTIFY_LINE=0 で無効化(Telegram集約時)。
     if os.environ.get("APPROVAL_NOTIFY_LINE", "1") != "0":
         line_client.push_quick_reply(header, items)
@@ -200,20 +224,33 @@ def _resolve_and_inject(token: str, key: str):
     return "failed", "⚠️ 送信に失敗しました。"
 
 
-def _try_answer_approval(text: str, reply_token: str) -> bool:
-    """承認待ちがあり text が Yes/No に解釈できれば、tmuxへ注入して True。
-    Apple WatchはLINEボタン(postback)を出せないので、テキスト「OK」等で承認する道。
-    承認待ちが無い/承認語でない時は False(=通常のHermes会話へ流す)。"""
+def _answer_pending_with_text(text):
+    """最新の保留承認に text(OK/y/no/数字)で答えて注入する。
+    戻り値 (handled: bool, status: str|None, message: str)。
+    承認待ち無し or 承認語でない → (False, None, "")。
+    LINE(_try_answer_approval)とTelegramポーラー(/approval/answer_text)の共通コア。"""
     entries = approval_store.pending_entries()
     if not entries:
-        return False
+        return False, None, ""
     entry = sorted(entries, key=lambda e: e.get("created", ""), reverse=True)[0]
     key = approval_reply.key_for(text, entry.get("choices", []))
     if not key:
+        return False, None, ""
+    status, msg = _resolve_and_inject(entry["token"], key)
+    return True, status, msg
+
+
+def _try_answer_approval(text: str, reply_token: str) -> bool:
+    """承認待ちがあり text が Yes/No に解釈できれば、tmuxへ注入して True。
+    Apple WatchはLINEボタン(postback)を出せないので、テキスト「OK」等で承認する道。
+    承認待ちが無い/承認語でない時は False(=通常のHermes会話へ流す)。
+    tmux注入自体はローカルsubprocess(短いtimeout)なので同期実行し、
+    ネットワーク越しのLINE返信だけ _spawn で非同期にする(webhookの応答を遅らせない)。"""
+    handled, _status, msg = _answer_pending_with_text(text)
+    if not handled:
         return False
 
     def _work():
-        _status, msg = _resolve_and_inject(entry["token"], key)
         line_client.reply(reply_token, msg)
 
     _spawn(_work)
@@ -284,6 +321,24 @@ def approval_answer():
         token = entries[0]["token"]
     status, msg = _resolve_and_inject(token, key)
     return {"status": status, "message": msg}, 200
+
+
+@app.post("/approval/answer_text")
+def approval_answer_text():
+    """Telegramポーラー用: {text} を受け、最新の保留承認に注入。X-Approval-Token 認証。
+    LINEの「OK」等テキスト横取り(_try_answer_approval)と同じコアを使う。"""
+    server_token = os.environ.get("APPROVAL_TOKEN", "")
+    if not server_token:
+        abort(503)
+    sent = request.headers.get("X-Approval-Token", "")
+    if not hmac.compare_digest(str(sent), server_token):
+        abort(401)
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text", "")).strip()
+    if not text:
+        abort(400)
+    handled, status, msg = _answer_pending_with_text(text)
+    return {"handled": handled, "status": status, "message": msg}, 200
 
 
 def _reminder_auth(data) -> bool:
