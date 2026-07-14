@@ -247,3 +247,49 @@ def test_process_success_after_prior_failures_clears_attempt_count(tmp_path, mon
                     push=lambda t: pushed.append(t), today="2026-07-14")
     assert r == "handled"
     assert "300" not in vi._load_attempts()
+
+
+# --- Minor: _quarantine の FileNotFoundError耐性 ------------------------------
+
+def test_quarantine_tolerates_already_missing_source(tmp_path, monkeypatch):
+    """並行drain/processでpendingが既に消えていても_quarantineは例外を出さない(冪等)。"""
+    _setup(tmp_path, monkeypatch)
+    missing = os.path.join(vi.PENDING_DIR, "gone.m4a")  # 存在しないファイル
+    dest = vi._quarantine(missing)  # 例外を投げないこと
+    assert dest == os.path.join(vi.FAILED_DIR, "gone.m4a")
+    assert not os.path.exists(dest)  # 元々無かったので移動先にも実体はできない
+
+def test_process_quarantine_survives_concurrent_removal_and_clears_attempts(tmp_path, monkeypatch):
+    """quarantine実行の瞬間にpendingファイルが(並行drain等で)消えていても、
+    process()の例外処理が完走し、attempts.jsonのエントリはちゃんと片付く。
+    os.replaceそのものを差し替えて「_find_pendingが見つけた直後に他プロセスが消した」
+    レースを再現する(_find_pending自体はfpがまだ存在する時点で見つける)。"""
+    _setup(tmp_path, monkeypatch)
+    os.makedirs(vi.PENDING_DIR, exist_ok=True)
+    fp = os.path.join(vi.PENDING_DIR, "500.m4a"); open(fp, "wb").write(b"x")
+    # MAX_ATTEMPTS-1 回まで失敗させて閾値の一歩手前にしておく
+    def boom(p): raise RuntimeError("gemini busy")
+    for _ in range(vi.MAX_ATTEMPTS - 1):
+        vi.process("500", transcribe=boom, draft=lambda t: ("t", "b"),
+                   write=lambda **kw: "/x.md", push=lambda t: None, today="2026-07-14")
+    assert vi._load_attempts().get("500") == vi.MAX_ATTEMPTS - 1
+
+    # _atomic_write_json(attempts.json/seen.json)も内部でos.replaceを使うため、
+    # quarantine対象(fp→FAILED_DIR)の移動だけを狙い撃ちしてレースを再現する。
+    original_replace = vi.os.replace
+    def racy_replace(src, dst):
+        if src == fp:
+            os.remove(src)
+            raise FileNotFoundError(src)
+        return original_replace(src, dst)
+    monkeypatch.setattr(vi.os, "replace", racy_replace)
+
+    pushed = []
+    r = vi.process("500", transcribe=boom, draft=lambda t: ("t", "b"),
+                   write=lambda **kw: "/x.md", push=lambda t: pushed.append(t),
+                   today="2026-07-14")
+    assert r == "failed"
+    assert "500" not in vi._load_attempts()  # 消えていてもattemptsは片付く
+    assert pushed.count(vi._FAILED) == 1
+
+    monkeypatch.setattr(vi.os, "replace", original_replace)

@@ -131,6 +131,103 @@ def test_transcribe_uses_file_api_for_large_files(monkeypatch, tmp_path):
     assert calls["generate"] == 1
 
 
+class _Resp403:
+    """resp.url に ?key=SECRET を含む本物のrequestsレスポンスを模す。
+    raise_for_status() を呼べば requests.exceptions.HTTPError が
+    そのURL(=APIキー)ごとメッセージに乗ることを示すための罠として持たせておき、
+    実装が raise_for_status() を呼んでいない(=罠を踏んでいない)ことを検証する。"""
+    def __init__(self, url, status=403):
+        self.status_code = status
+        self.url = url
+        self.headers = {}
+        self.text = "Forbidden"
+
+    def raise_for_status(self):
+        import requests as _r
+        raise _r.exceptions.HTTPError(
+            f"{self.status_code} Client Error: Forbidden for url: {self.url}"
+        )
+
+    def json(self):
+        return {}
+
+
+def test_upload_start_403_does_not_leak_api_key(monkeypatch, tmp_path):
+    """File API アップロード開始(start)が403を返しても、
+    resp.url(?key=SECRETKEY)がエラーメッセージに漏れない(raise_for_status()を使わない)。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETKEY")
+    f = tmp_path / "big.m4a"; f.write_bytes(b"x" * (8 * 1024 * 1024))  # >7MB => File API経由
+
+    def fake_post(url, **kw):
+        if "upload/v1beta/files" in url:
+            return _Resp403(url)
+        raise AssertionError(f"generateContentまで到達すべきでない: {url}")
+
+    import pytest
+    with pytest.raises(RuntimeError) as exc:
+        gt.transcribe(str(f), post=fake_post, get=lambda *a, **k: _Resp(200), sleep=lambda s: None)
+    msg = str(exc.value)
+    assert "SECRETKEY" not in msg
+    assert "key=" not in msg
+
+
+def test_upload_send_403_does_not_leak_api_key(monkeypatch, tmp_path):
+    """resumableアップロード本体の送信(up)が403でも同様にキーが漏れない。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETKEY")
+    f = tmp_path / "big.m4a"; f.write_bytes(b"x" * (8 * 1024 * 1024))
+
+    def fake_post(url, **kw):
+        if "upload/v1beta/files" in url:
+            return _Resp(200, headers={"X-Goog-Upload-URL": "https://upload.example/abc?key=SECRETKEY"})
+        if url.startswith("https://upload.example/abc"):
+            return _Resp403(url)
+        raise AssertionError(f"generateContentまで到達すべきでない: {url}")
+
+    import pytest
+    with pytest.raises(RuntimeError) as exc:
+        gt.transcribe(str(f), post=fake_post, get=lambda *a, **k: _Resp(200), sleep=lambda s: None)
+    msg = str(exc.value)
+    assert "SECRETKEY" not in msg
+    assert "key=" not in msg
+
+
+def test_upload_file_directly_403_does_not_leak_key(monkeypatch, tmp_path):
+    """_upload_file を直接叩いても(File API path強制ではなく)、start/up双方の403でキーが漏れない。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETKEY")
+    f = tmp_path / "any.m4a"; f.write_bytes(b"x" * 10)
+
+    def fake_post(url, **kw):
+        return _Resp403(url)
+
+    import pytest
+    with pytest.raises(RuntimeError) as exc:
+        gt._upload_file(str(f), "audio/mp4", post=fake_post, get=lambda *a, **k: _Resp(200))
+    msg = str(exc.value)
+    assert "SECRETKEY" not in msg
+    assert "key=" not in msg
+
+
+def test_upload_file_poll_403_does_not_leak_key(monkeypatch, tmp_path):
+    """file-state のポーリング(get)が403でもキーが漏れない。"""
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETKEY")
+    f = tmp_path / "any.m4a"; f.write_bytes(b"x" * 10)
+
+    def fake_post(url, **kw):
+        if "upload/v1beta/files" in url:
+            return _Resp(200, headers={"X-Goog-Upload-URL": "https://upload.example/abc"})
+        return _Resp(200, {"file": {"name": "files/abc", "uri": "https://files/abc", "state": "PROCESSING"}})
+
+    def fake_get(url, **kw):
+        return _Resp403(url)
+
+    import pytest
+    with pytest.raises(RuntimeError) as exc:
+        gt._upload_file(str(f), "audio/mp4", post=fake_post, get=fake_get, sleep=lambda s: None)
+    msg = str(exc.value)
+    assert "SECRETKEY" not in msg
+    assert "key=" not in msg
+
+
 def test_transcribe_long_concatenates_chunks(monkeypatch, tmp_path):
     f = tmp_path / "long.m4a"; f.write_bytes(b"x" * 10)
     def fake_split(path, chunk_sec, workdir):

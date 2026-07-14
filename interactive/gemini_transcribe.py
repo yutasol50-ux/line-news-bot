@@ -49,6 +49,15 @@ def _safe_request_error(e):
     return RuntimeError(f"Gemini request failed: {type(e).__name__}")
 
 
+def _check_status(resp, what):
+    """resp.raise_for_status() の代わり。HTTPErrorのメッセージは
+    `... for url: {resp.url}` の形で `?key=...` ごとURLを含んでしまうため、
+    ステータスコードだけを含む安全なRuntimeErrorに変換する(resp.textも含めない=
+    エコーされたURLが混入するリスクを避ける)。"""
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Gemini {what} failed: HTTP {resp.status_code}") from None
+
+
 def guess_mime(path):
     m, _ = mimetypes.guess_type(path)
     if m:
@@ -79,7 +88,7 @@ def _upload_file(path, mime, *, post=requests.post, get=requests.get, sleep=time
         )
     except requests.exceptions.RequestException as e:
         raise _safe_request_error(e) from None
-    start.raise_for_status()
+    _check_status(start, "upload開始")
     upload_url = start.headers.get("X-Goog-Upload-URL")
     if not upload_url:
         raise RuntimeError(f"アップロードURL取得失敗: {start.text}")
@@ -96,15 +105,17 @@ def _upload_file(path, mime, *, post=requests.post, get=requests.get, sleep=time
             )
     except requests.exceptions.RequestException as e:
         raise _safe_request_error(e) from None
-    up.raise_for_status()
+    _check_status(up, "upload送信")
     info = up.json()["file"]
     name, uri = info["name"], info["uri"]
     while info.get("state") == "PROCESSING":
         sleep(2)
         try:
-            info = get(f"{API}/v1beta/{name}?key={key}").json()
+            poll = get(f"{API}/v1beta/{name}?key={key}")
         except requests.exceptions.RequestException as e:
             raise _safe_request_error(e) from None
+        _check_status(poll, "処理状態確認")
+        info = poll.json()
     if info.get("state") != "ACTIVE":
         raise RuntimeError(f"ファイル処理失敗: {info.get('state')}")
     return uri, mime

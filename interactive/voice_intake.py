@@ -126,10 +126,15 @@ def _clear_attempts(mid):
             _atomic_write_json(ATTEMPTS_PATH, d)
 
 def _quarantine(path):
-    """恒久失敗と判断したpendingファイルを failed/ へ移す(drainの対象外にする)。"""
+    """恒久失敗と判断したpendingファイルを failed/ へ移す(drainの対象外にする)。
+    移動先で既にsrcが消えていても(並行drain/processと競合)、隔離としては
+    目的達成済みとみなし例外を投げない(冪等)。無関係なエラーは伝播させる。"""
     os.makedirs(FAILED_DIR, exist_ok=True)
     dest = os.path.join(FAILED_DIR, os.path.basename(path))
-    os.replace(path, dest)
+    try:
+        os.replace(path, dest)
+    except FileNotFoundError:
+        pass  # 既に消えている=並行処理で片付いた。隔離は完了扱いにする
     return dest
 
 def save_pending(message_id, data, content_type):
