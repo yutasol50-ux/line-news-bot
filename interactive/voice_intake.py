@@ -30,11 +30,31 @@ def _load_seen():
 
 def is_seen(mid): return mid in _load_seen()
 
+def _save_seen(s):
+    os.makedirs(os.path.dirname(SEEN_PATH), exist_ok=True)
+    with open(SEEN_PATH, "w") as f: json.dump(sorted(s), f)
+
 def mark_seen(mid):
     with _LOCK:
         s = _load_seen(); s.add(mid)
-        os.makedirs(os.path.dirname(SEEN_PATH), exist_ok=True)
-        with open(SEEN_PATH, "w") as f: json.dump(sorted(s), f)
+        _save_seen(s)
+
+def claim(mid):
+    """原子的なcheck-and-set。既にseen済みならFalse、未見なら即マークしてTrueを返す。"""
+    with _LOCK:
+        s = _load_seen()
+        if mid in s:
+            return False
+        s.add(mid)
+        _save_seen(s)
+        return True
+
+def unmark_seen(mid):
+    """claim後にfetch失敗した場合のロールバック。再送で再度claimできるようにする。"""
+    with _LOCK:
+        s = _load_seen()
+        s.discard(mid)
+        _save_seen(s)
 
 def save_pending(message_id, data, content_type):
     os.makedirs(PENDING_DIR, exist_ok=True)
@@ -46,16 +66,16 @@ def _spawn_thread(fn): threading.Thread(target=fn, daemon=True).start()
 
 def handle(message_id, reply_token, *, fetch=line_media.fetch_content,
            reply=line_client.reply, spawn=_spawn_thread):
-    if is_seen(message_id):
+    if not claim(message_id):
         return "duplicate"
     try:
         data, content_type = fetch(message_id)
     except Exception as e:
         print(f"[ERROR] voice_intake fetch: {e}")
+        unmark_seen(message_id)
         reply(reply_token, "音声の取得でつまずいちゃった。もう一度送ってみて。")
         return "fetch_error"
     save_pending(message_id, data, content_type)
-    mark_seen(message_id)
     reply(reply_token, _ACK)
     spawn(lambda: process(message_id))
     return "accepted"
@@ -80,11 +100,15 @@ def process(message_id, *, transcribe=gemini_transcribe.transcribe_long,
         title, body = draft(transcript)
         md = write(title=title, body=body, transcript=transcript,
                    message_id=message_id, inbox=INBOX, today=today)
+        print(f"[voice_intake] wrote {md}")
     except Exception as e:
         print(f"[ERROR] voice_intake process {message_id}: {e}")
         push(_BUSY)          # pendingは残す=あとでdrainが再開
         return "retry_later"
-    os.remove(path)
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass  # 並行removeで既に消えていても問題ない
     head = body.strip().splitlines()[:4]
     push(f"📝『{title}』ノートにしたよ\n" + "\n".join(head) + "\n※あとでPCでOpusがClean upするね")
     return "handled"
