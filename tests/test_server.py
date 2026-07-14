@@ -142,6 +142,54 @@ def test_audio_message_routes_to_voice_intake(monkeypatch):
     assert calls == [("voice", "A1", "RT")]
 
 
+def test_audio_file_attachment_routes_to_voice_intake(monkeypatch):
+    """type=file でもファイル名が音声拡張子(.m4a等)なら voice_intake.handle へ。
+
+    ユーザーの実運用は「長尺録音をFilesアプリから共有」で type=file 扱いになるため、
+    ここが media_intake に流れると「その形式は読めない」と拒否されてしまう。
+    """
+    calls = []
+    _setup_media(monkeypatch, calls)
+    monkeypatch.setattr(server.voice_intake, "handle",
+                        lambda mid, rt: calls.append(("voice", mid, rt)))
+    r = server.app.test_client().post(
+        "/webhook", data=json.dumps({"events": [
+            _media_event(mtype="file", mid="F2", file_name="recording.m4a")]}),
+        headers={"X-Line-Signature": "x", "Content-Type": "application/json"})
+    assert r.status_code == 200
+    assert calls == [("voice", "F2", "RT")]
+
+
+def test_pdf_file_attachment_still_routes_to_media_intake(monkeypatch):
+    """非音声のfile(PDF等)は従来どおり media_intake.handle へ(回帰防止)。"""
+    calls = []
+    _setup_media(monkeypatch, calls)
+    monkeypatch.setattr(server.voice_intake, "handle",
+                        lambda mid, rt: calls.append(("voice", mid, rt)))
+    r = _post(server.app.test_client(),
+              [_media_event(mtype="file", mid="F3", file_name="請求書.pdf")])
+    assert r.status_code == 200
+    assert calls == [("F3", "file", "RT")]
+
+
+def test_diary_mode_audio_file_routes_to_voice_intake_not_photo(monkeypatch):
+    """日記モード中の音声ファイル添付(.m4a)も diary_collector.handle_photo ではなく
+    voice_intake.handle へ。"""
+    calls = []
+    _setup_media(monkeypatch, calls)
+    monkeypatch.setattr(server.diary_state, "is_active", lambda: True)
+    monkeypatch.setattr(server.voice_intake, "handle",
+                        lambda mid, rt: calls.append(("voice", mid, rt)))
+    monkeypatch.setattr(server.diary_collector, "handle_photo",
+                        lambda mid, rt: calls.append(("photo", mid, rt)))
+    r = server.app.test_client().post(
+        "/webhook", data=json.dumps({"events": [
+            _media_event(mtype="file", mid="F4", file_name="voice memo.mp3")]}),
+        headers={"X-Line-Signature": "x", "Content-Type": "application/json"})
+    assert r.status_code == 200
+    assert calls == [("voice", "F4", "RT")]
+
+
 def test_diary_mode_audio_routes_to_voice_intake_not_photo(monkeypatch):
     """日記モード中でも音声は diary_collector.handle_photo ではなく voice_intake.handle へ。"""
     calls = []

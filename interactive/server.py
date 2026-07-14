@@ -336,6 +336,16 @@ def reminder_snooze():
     return {"status": "snoozed", "message": f"{minutes}分後にまた鳴らすね⏰"}, 200
 
 
+# --- 音声ファイル添付の判定 --------------------------------------------------
+# LINEの type=file は拡張子を問わず届く。ユーザーの実運用は「長尺録音をファイル共有」
+# なので、拡張子が音声系なら voice_intake へ、それ以外(PDF等)は media_intake へ。
+_AUDIO_FILE_EXTS = (".m4a", ".mp3", ".wav", ".aac", ".ogg", ".m4b", ".mp4", ".caf", ".opus", ".flac")
+
+
+def _is_audio_file(msg):
+    return (msg.get("fileName") or "").lower().endswith(_AUDIO_FILE_EXTS)
+
+
 @app.post("/webhook")
 def webhook():
     body = request.get_data()
@@ -372,10 +382,11 @@ def webhook():
             if mtype == "text":
                 t = msg["text"]
                 _spawn(lambda tx=t, rt=reply_token: diary_collector.handle_text(tx, rt))
-            elif mtype == "audio":  # 日記モード中でも音声メモはObsidianノートへ
+            elif mtype == "audio" or (mtype == "file" and _is_audio_file(msg)):
+                # 日記モード中でも音声(hold-mic or ファイル添付)はObsidianノートへ
                 mid = msg.get("id", "")
                 _spawn(lambda i=mid, rt=reply_token: voice_intake.handle(i, rt))
-            else:  # image / file
+            else:  # image / 非音声file
                 mid = msg.get("id", "")
                 _spawn(lambda i=mid, rt=reply_token: diary_collector.handle_photo(i, rt))
             continue
@@ -389,10 +400,11 @@ def webhook():
         if mtype == "text":
             text = msg["text"]
             _spawn(lambda t=text, rt=reply_token: _process(t, rt, now_iso))
-        elif mtype == "audio":  # 音声 → 保存/文字起こし/Obsidianドラフト化
+        elif mtype == "audio" or (mtype == "file" and _is_audio_file(msg)):
+            # 音声(hold-mic or ファイル添付) → 保存/文字起こし/Obsidianドラフト化
             mid = msg.get("id", "")
             _spawn(lambda i=mid, rt=reply_token: voice_intake.handle(i, rt))
-        else:  # image / file(PDF) → 取得→読解→Hermesへ
+        else:  # image / 非音声file(PDF等) → 取得→読解→Hermesへ
             mid = msg.get("id", "")
             _spawn(lambda i=mid, k=mtype, rt=reply_token: media_intake.handle(i, k, rt))
     return "ok", 200
