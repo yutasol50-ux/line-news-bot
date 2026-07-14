@@ -126,9 +126,30 @@ def test_webhook_routes_file_to_media_intake(monkeypatch):
     assert calls == [("F1", "file", "RT")]
 
 
-def test_webhook_ignores_audio(monkeypatch):
+def test_audio_message_routes_to_voice_intake(monkeypatch):
+    """音声メッセージは media_intake ではなく voice_intake.handle に渡る。"""
     calls = []
     _setup_media(monkeypatch, calls)
-    r = _post(server.app.test_client(), [_media_event(mtype="audio", mid="A1")])
+    monkeypatch.setattr(server.voice_intake, "handle",
+                        lambda mid, rt: calls.append(("voice", mid, rt)))
+    r = server.app.test_client().post(
+        "/webhook", data=json.dumps({"events": [_media_event(mtype="audio", mid="A1")]}),
+        headers={"X-Line-Signature": "x", "Content-Type": "application/json"})
     assert r.status_code == 200
-    assert calls == []                         # 音声は未対応(スコープ外)
+    assert calls == [("voice", "A1", "RT")]
+
+
+def test_diary_mode_audio_routes_to_voice_intake_not_photo(monkeypatch):
+    """日記モード中でも音声は diary_collector.handle_photo ではなく voice_intake.handle へ。"""
+    calls = []
+    _setup_media(monkeypatch, calls)
+    monkeypatch.setattr(server.diary_state, "is_active", lambda: True)
+    monkeypatch.setattr(server.voice_intake, "handle",
+                        lambda mid, rt: calls.append(("voice", mid, rt)))
+    monkeypatch.setattr(server.diary_collector, "handle_photo",
+                        lambda mid, rt: calls.append(("photo", mid, rt)))
+    r = server.app.test_client().post(
+        "/webhook", data=json.dumps({"events": [_media_event(mtype="audio", mid="A2")]}),
+        headers={"X-Line-Signature": "x", "Content-Type": "application/json"})
+    assert r.status_code == 200
+    assert calls == [("voice", "A2", "RT")]

@@ -27,6 +27,8 @@ from interactive import approval_store
 from interactive import approval_reply
 from interactive import reminder_store
 from interactive import tmux_inject
+from interactive import voice_intake
+from interactive import voice_drain
 from interactive.actions import calendar_add
 from shared import line_client
 from shared import pushcut_client
@@ -35,6 +37,20 @@ from shared import bark_client
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 JST = timezone(timedelta(hours=9))
+
+
+def _startup_drain():
+    """起動時に1回だけ、pendingに残った音声を再処理する(cron連動はしない=out of scope)。
+    バックログが大きくてもFlask起動をブロックしないようdaemonスレッドで実行。"""
+    try:
+        n = voice_drain.drain()
+        if n:
+            print(f"[startup] voice_drain: {n}件を再開")
+    except Exception as e:
+        print(f"[startup] voice_drain skipped: {e}")
+
+
+threading.Thread(target=_startup_drain, daemon=True).start()
 
 app = Flask(__name__)
 app.register_blueprint(diary_web.bp)
@@ -343,8 +359,8 @@ def webhook():
             continue
         msg = event.get("message", {})
         mtype = msg.get("type")
-        if mtype not in ("text", "image", "file"):
-            continue  # audio 等は未対応(将来STT)
+        if mtype not in ("text", "image", "file", "audio"):
+            continue  # sticker/location 等は未対応
         event_id = event.get("webhookEventId", "")
         # 多重処理の防止は webhookEventId の重複排除だけで行う。
         # isRedelivery では弾かない: 一度も処理できなかったイベントの再送
@@ -358,6 +374,9 @@ def webhook():
             if mtype == "text":
                 t = msg["text"]
                 _spawn(lambda tx=t, rt=reply_token: diary_collector.handle_text(tx, rt))
+            elif mtype == "audio":  # 日記モード中でも音声メモはObsidianノートへ
+                mid = msg.get("id", "")
+                _spawn(lambda i=mid, rt=reply_token: voice_intake.handle(i, rt))
             else:  # image / file
                 mid = msg.get("id", "")
                 _spawn(lambda i=mid, rt=reply_token: diary_collector.handle_photo(i, rt))
@@ -372,6 +391,9 @@ def webhook():
         if mtype == "text":
             text = msg["text"]
             _spawn(lambda t=text, rt=reply_token: _process(t, rt, now_iso))
+        elif mtype == "audio":  # 音声 → 保存/文字起こし/Obsidianドラフト化
+            mid = msg.get("id", "")
+            _spawn(lambda i=mid, rt=reply_token: voice_intake.handle(i, rt))
         else:  # image / file(PDF) → 取得→読解→Hermesへ
             mid = msg.get("id", "")
             _spawn(lambda i=mid, k=mtype, rt=reply_token: media_intake.handle(i, k, rt))
