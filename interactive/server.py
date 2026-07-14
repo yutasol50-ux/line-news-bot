@@ -32,6 +32,7 @@ from interactive import voice_drain
 from interactive.actions import calendar_add
 from shared import line_client
 from shared import pushcut_client
+from shared import telegram_client
 from shared import bark_client
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -165,6 +166,10 @@ def approval_notify():
     )
     # Pushcut: 腕から承認ボタン。動的タイトル/本文はPRO機能なので送らない(名前で鳴らすだけ)。
     pushcut_client.notify()
+    # Telegram(Claude Code専用bot): 無料無制限＆Watchで読める。選択肢も本文に含める。
+    # ※現状は「通知」まで。OK返信での承認注入は別途ポーラーで対応予定。
+    _tg_choices = " / ".join(f'{c["key"]}={c["label"]}' for c in parsed["choices"])
+    telegram_client.notify(f"{header}\n\n選択肢: {_tg_choices}")
     # LINE: 遅めだが記録が残る＆クイックリプライ。最後に。
     line_client.push_quick_reply(header, items)
     return {"token": token}, 200
