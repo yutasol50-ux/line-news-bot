@@ -105,7 +105,9 @@ def _answer(text: str) -> dict:
 
 
 def _reply(message: str) -> None:
-    if message:
+    # 承認後の「✅ 送信しました」確認は鬱陶しいので既定で送らない。
+    # TG_APPROVAL_CONFIRM=1 で復活可能。
+    if os.environ.get("TG_APPROVAL_CONFIRM", "0") == "1" and message:
         telegram_client.notify(message)
 
 
@@ -122,6 +124,15 @@ def run():
         return
 
     offset = _load_offset()
+    if offset == 0:
+        # 初回起動: 溜まっている古い返信(テストの「OK」等)を承認に流さないよう、
+        # 現在の最新update_idまでoffsetを進めてバックログを読み飛ばす。
+        try:
+            offset, _ = poll_once(-1)
+            _save_offset(offset)
+            print(f"[telegram_approval_poller] primed offset={offset} (skipped backlog)")
+        except Exception as e:
+            print(f"[telegram_approval_poller] prime failed: {type(e).__name__}")
     print(f"[telegram_approval_poller] start offset={offset}")
     while True:
         try:

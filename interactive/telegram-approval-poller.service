@@ -1,0 +1,12 @@
+[Unit]
+Description=Telegram Approval Poller (Watch/Telegram approval -> Claude Code inject)
+After=network-online.target secretary-webhook.service
+
+[Service]
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/yuta/line/line-news-bot/interactive/run_tg_poller.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
