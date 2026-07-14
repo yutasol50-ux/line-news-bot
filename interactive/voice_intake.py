@@ -70,12 +70,12 @@ def handle(message_id, reply_token, *, fetch=line_media.fetch_content,
         return "duplicate"
     try:
         data, content_type = fetch(message_id)
+        save_pending(message_id, data, content_type)
     except Exception as e:
         print(f"[ERROR] voice_intake fetch: {e}")
         unmark_seen(message_id)
         reply(reply_token, "音声の取得でつまずいちゃった。もう一度送ってみて。")
         return "fetch_error"
-    save_pending(message_id, data, content_type)
     reply(reply_token, _ACK)
     spawn(lambda: process(message_id))
     return "accepted"

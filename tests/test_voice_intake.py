@@ -88,6 +88,32 @@ def test_handle_fetch_failure_does_not_leave_claim_and_allows_retry(tmp_path, mo
     assert r2 == "accepted"
     assert spawned
 
+def test_handle_save_pending_failure_does_not_leave_claim_and_allows_retry(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    replies = []
+    original_save_pending = vi.save_pending
+    def boom_save_pending(message_id, data, content_type):
+        raise OSError("disk full")
+    monkeypatch.setattr(vi, "save_pending", boom_save_pending)
+
+    r = vi.handle("400", "RT",
+                  fetch=lambda mid: (b"audiobytes", "audio/m4a"),
+                  reply=lambda rt, t: replies.append((rt, t)),
+                  spawn=lambda fn: None)
+    assert r == "fetch_error"
+    assert replies  # エラー返信が送られた
+    assert not os.path.exists(vi.PENDING_DIR) or not os.listdir(vi.PENDING_DIR)
+
+    # 未クレームのまま=再送で同じidが処理できる(save_pending失敗でも二度と再送不能にならない)
+    monkeypatch.setattr(vi, "save_pending", original_save_pending)
+    spawned = []
+    r2 = vi.handle("400", "RT",
+                   fetch=lambda mid: (b"audiobytes", "audio/m4a"),
+                   reply=lambda rt, t: replies.append((rt, t)),
+                   spawn=lambda fn: spawned.append(fn))
+    assert r2 == "accepted"
+    assert spawned
+
 def test_handle_claim_is_atomic_second_call_is_duplicate(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     assert vi.claim("300") is True
